@@ -8,6 +8,7 @@
  * @license MIT
  */
 import { Env, ChatMessage } from "./types";
+import { fetchFhir, getPatientSession, handleAuthRequest } from "./auth";
 
 // Model ID for Workers AI model
 // https://developers.cloudflare.com/workers-ai/models/
@@ -28,6 +29,20 @@ export default {
 	): Promise<Response> {
 		const url = new URL(request.url);
 
+		// MyChart patient sign-in (SMART on FHIR)
+		if (url.pathname.startsWith("/auth/")) {
+			try {
+				const response = await handleAuthRequest(request, env);
+				if (response) return response;
+			} catch (error) {
+				console.error("Error processing auth request:", error);
+				return new Response("Sign-in with MyChart is unavailable.", {
+					status: 502,
+				});
+			}
+			return new Response("Not found", { status: 404 });
+		}
+
 		// Handle static assets (frontend)
 		if (url.pathname === "/" || !url.pathname.startsWith("/api/")) {
 			return env.ASSETS.fetch(request);
@@ -41,6 +56,13 @@ export default {
 			}
 
 			// Method not allowed for other request types
+			return new Response("Method not allowed", { status: 405 });
+		}
+
+		if (url.pathname === "/api/patient") {
+			if (request.method === "GET") {
+				return handlePatientRequest(request, env);
+			}
 			return new Response("Method not allowed", { status: 405 });
 		}
 
@@ -100,5 +122,63 @@ async function handleChatRequest(
 				headers: { "content-type": "application/json" },
 			},
 		);
+	}
+}
+
+/**
+ * Returns a summary of the signed-in patient's FHIR Patient resource
+ */
+async function handlePatientRequest(
+	request: Request,
+	env: Env,
+): Promise<Response> {
+	const { session, setCookie } = await getPatientSession(request, env);
+	const headers = new Headers({
+		"content-type": "application/json",
+		"cache-control": "no-store",
+	});
+	if (setCookie) headers.append("set-cookie", setCookie);
+
+	if (!session) {
+		return new Response(JSON.stringify({ authenticated: false }), {
+			status: 401,
+			headers,
+		});
+	}
+
+	try {
+		const response = await fetchFhir(
+			session,
+			`Patient/${encodeURIComponent(session.patient)}`,
+		);
+		if (!response.ok) {
+			throw new Error(`FHIR Patient read failed: ${response.status}`);
+		}
+		const patient = (await response.json()) as {
+			id: string;
+			birthDate?: string;
+			name?: { use?: string; text?: string; given?: string[]; family?: string }[];
+		};
+		const name =
+			patient.name?.find((n) => n.use === "official") ?? patient.name?.[0];
+		return new Response(
+			JSON.stringify({
+				authenticated: true,
+				patient: {
+					id: patient.id,
+					name:
+						name?.text ??
+						[...(name?.given ?? []), name?.family].filter(Boolean).join(" "),
+					birthDate: patient.birthDate,
+				},
+			}),
+			{ headers },
+		);
+	} catch (error) {
+		console.error("Error fetching patient:", error);
+		return new Response(JSON.stringify({ error: "Failed to load patient" }), {
+			status: 502,
+			headers,
+		});
 	}
 }

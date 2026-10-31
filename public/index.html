@@ -134,6 +134,17 @@
 				display: block;
 			}
 
+			.auth-status {
+				margin-top: 0.5rem;
+				font-size: 0.9rem;
+				color: var(--text-light);
+			}
+
+			.auth-status a {
+				color: var(--primary-color);
+				font-weight: 600;
+			}
+
 			footer {
 				margin-top: 1rem;
 				text-align: center;
@@ -146,6 +157,9 @@
 		<header>
 			<h1>Cloudflare AI Chat</h1>
 			<p>Powered by Cloudflare Workers AI</p>
+			<p class="auth-status" id="auth-status">
+				<a href="/auth/login">Sign in with MyChart</a>
+			</p>
 		</header>
 
 		<div class="chat-container">

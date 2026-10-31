@@ -9,6 +9,7 @@ const chatMessages = document.getElementById("chat-messages");
 const userInput = document.getElementById("user-input");
 const sendButton = document.getElementById("send-button");
 const typingIndicator = document.getElementById("typing-indicator");
+const authStatus = document.getElementById("auth-status");
 
 // Chat state
 let chatHistory = [
@@ -36,6 +37,27 @@ userInput.addEventListener("keydown", function (e) {
 
 // Send button click handler
 sendButton.addEventListener("click", sendMessage);
+
+loadPatient();
+
+/**
+ * Shows the signed-in MyChart patient, if any
+ */
+async function loadPatient() {
+	try {
+		const response = await fetch("/api/patient");
+		if (!response.ok) return;
+		const { patient } = await response.json();
+
+		authStatus.textContent = `Signed in as ${patient.name || "patient"} · `;
+		const signOut = document.createElement("a");
+		signOut.href = "/auth/logout";
+		signOut.textContent = "Sign out";
+		authStatus.appendChild(signOut);
+	} catch (error) {
+		console.error("Error loading patient:", error);
+	}
+}
 
 /**
  * Sends a message to the chat API and processes the response

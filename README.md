@@ -91,6 +91,7 @@ npm wrangler tail
 │   └── chat.js         # Chat UI frontend script
 ├── src/
 │   ├── index.ts        # Main Worker entry point
+│   ├── auth.ts         # Epic MyChart patient sign-in (SMART on FHIR)
 │   └── types.ts        # TypeScript type definitions
 ├── test/               # Test files
 ├── wrangler.jsonc      # Cloudflare Worker configuration
@@ -116,6 +117,52 @@ The frontend is a simple HTML/CSS/JavaScript application that:
 2. Sends user messages to the API
 3. Processes streaming responses in real-time
 4. Maintains chat history on the client side
+
+## MyChart Patient Sign-In
+
+Patients can sign in with their Epic MyChart account. This follows Epic's
+[patient authentication tutorial](https://open.epic.com/Tutorial/PatientAuthentication):
+a SMART on FHIR standalone launch using the OAuth 2.0 authorization code flow with PKCE.
+
+| Route            | Purpose                                                                 |
+| ---------------- | ----------------------------------------------------------------------- |
+| `/auth/login`    | Discovers endpoints from `.well-known/smart-configuration` and redirects to MyChart |
+| `/auth/callback` | Verifies `state`, exchanges the code + PKCE verifier for an access token |
+| `/auth/logout`   | Clears the session                                                      |
+| `/api/patient`   | Returns the signed-in patient's name and birth date (FHIR `Patient` read) |
+
+The session is stored in an AES-GCM encrypted, `HttpOnly` cookie, and the
+access token is refreshed automatically when Epic issues a refresh token.
+
+### Setup
+
+1. Create an app at [Epic on FHIR](https://fhir.epic.com/) with **Patients** as
+   the audience, and register `https://<your-worker>/auth/callback` (and
+   `http://localhost:8787/auth/callback` for local development) as redirect URIs.
+2. Configure the Worker:
+
+   ```bash
+   # Required
+   npx wrangler secret put SESSION_SECRET      # any long random string
+   # Set EPIC_CLIENT_ID as a var in wrangler.jsonc or in the dashboard
+   # Optional
+   npx wrangler secret put EPIC_CLIENT_SECRET  # confidential clients only
+   ```
+
+   For local development, put the same values in a `.dev.vars` file.
+
+| Variable             | Default                                                       |
+| -------------------- | ------------------------------------------------------------- |
+| `EPIC_CLIENT_ID`     | — (required; use the non-production ID for the sandbox)       |
+| `SESSION_SECRET`     | — (required)                                                  |
+| `EPIC_CLIENT_SECRET` | unset → public client (PKCE only)                             |
+| `EPIC_FHIR_BASE_URL` | `https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4` (sandbox) |
+| `EPIC_REDIRECT_URI`  | `<request origin>/auth/callback`                              |
+| `EPIC_SCOPE`         | `launch/patient openid fhirUser`                              |
+
+To go live with a specific health system, set `EPIC_FHIR_BASE_URL` to that
+organization's FHIR R4 endpoint (listed on open.epic.com) and use your
+production client ID.
 
 ## Customization
 
