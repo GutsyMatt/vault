@@ -23,6 +23,8 @@ Elsewhere, "verified" means verified **locally**: automated tests (synthetic val
 | Source health: NOT CONNECTED / DEGRADED shown, never "nothing found" | PARTIAL (tested locally) | Test "5. degraded sources" | Build real connectors |
 | Corrected age and America/Toronto DST handling | PARTIAL (tested locally) | Test "8. time and corrected age" | |
 | Full JSON export per person | PARTIAL (tested locally) | Test "export" | |
+| Keepsake letters: parents write letters; "keep this for him" on log entries; a monthly letter per child (1st of the month, previous month), stored permanently and in the export; medical details excluded unless kept on purpose | PARTIAL (tested locally) | Tests "keepsake letters"; browser check of Letters tab | Email delivery (B7) |
+| Keepsake email delivery to each boy's own address | NOT IMPLEMENTED | Each letter records `NOT_SENT_DELIVERY_NOT_CONNECTED` or `NOT_SENT_NO_ADDRESS`, never silent | B7 |
 | Google Calendar / Gmail / Drive connectors | NOT IMPLEMENTED | Sources page shows them as NOT CONNECTED | Needs OAuth approval (B4) |
 | Growth charts, milestones, specialty-specific brief templates, family overview, TV mode | NOT IMPLEMENTED | | Phase 4 |
 | Notifications (email digest) | NOT IMPLEMENTED | | Phase 3 |
@@ -46,6 +48,7 @@ Known risk at step 3: the Workers Builds token may lack permission to create the
 ## Other blockers
 | # | Blocked | Needed |
 |---|---|---|
+| B7 | Emailing the boys' monthly letters | `libbyhd.org` mail runs on Google Workspace (MX → Google), so Cloudflare email can't be used without moving mail. Needs one Google sending credential (e.g. a `family@libbyhd.org` mailbox authorised for Gmail sending). The boys' Gmail addresses are already created; enter them in each boy's Letters tab |
 | B4 | Calendar, Gmail and Drive connectors | Uses the same LifeOS Google project. Later phase |
 | B5 | Any AI on health data | Approve a data-handling note |
 | B6 | Repo name `LibbyHD/familyOS` | Account rename to `LibbyHD` is **done** (2026-11-02). Remaining: rename the repo `vault` → `familyOS` in Settings → General, then confirm Cloudflare → vault → Settings → Build still shows it connected |

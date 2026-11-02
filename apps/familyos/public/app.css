@@ -91,8 +91,8 @@ h3 { font-size: 1.05rem; margin: 0 0 6px; }
 
 .alert { background: var(--danger-bg); color: var(--danger); padding: 14px 16px; font-weight: 600; max-width: 760px; margin: 8px auto; border-radius: var(--radius); }
 
-.tabs { position: sticky; top: 0; z-index: 5; display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 8px 16px; background: var(--bg); max-width: 760px; margin: 0 auto; }
-.tabs button { min-height: 48px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-weight: 600; }
+.tabs { position: sticky; top: 0; z-index: 5; display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 8px 16px; background: var(--bg); max-width: 760px; margin: 0 auto; }
+.tabs button { font-size: 0.95rem; padding: 6px 2px; min-height: 48px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-weight: 600; }
 .tabs button[aria-current="page"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 
 main { max-width: 760px; margin: 0 auto; padding: 8px 16px 48px; }

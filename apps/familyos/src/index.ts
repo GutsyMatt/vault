@@ -29,7 +29,11 @@ const NOSTORE = { "cache-control": "no-store" };
 
 function withHeaders(res: Response, extra: Record<string, string> = {}): Response {
 	const r = new Response(res.body, res);
-	for (const [k, v] of Object.entries({ ...SECURITY_HEADERS, ...extra })) r.headers.set(k, v);
+	for (const [k, v] of Object.entries({ ...SECURITY_HEADERS, ...extra })) {
+		// A response that already set a stricter, specific CSP (e.g. a stored letter) keeps it.
+		if (k === "content-security-policy" && res.headers.has(k) && !(k in extra)) continue;
+		r.headers.set(k, v);
+	}
 	return r;
 }
 
