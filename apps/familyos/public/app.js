@@ -584,7 +584,9 @@ async function loadHousehold() {
 	$("#ages").textContent = "Both boys at a glance. Tap a name to open his record.";
 	$("#fresh").textContent = `Updated ${new Date(h.generated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`;
 	const proto = location.protocol;
-	el.innerHTML = `<div class="hh">${h.members
+	const tasks = h.members.flatMap((m) => (m.card?.tasks || []).map((t) => ({ ...t, person: m.person, host: m.host, display_name: m.card?.profile?.display_name || m.person })));
+	const taskbar = `<div class="card taskbar"><div class="row between"><h2>Tasks</h2><span class="badge">${tasks.length} open</span></div>${tasks.length ? `<ul class="list">${tasks.map((t) => `<li><div class="row between"><strong>${esc(t.title)}</strong>${t.overdue ? `<span class="badge overdue">Overdue${t.due_date ? ` ${esc(t.due_date)}` : ""}</span>` : `<span class="badge">${esc(nice(t.status))}</span>`}</div><div class="small">${esc(t.display_name)}${t.next_action ? ` · Next: ${esc(t.next_action)}` : ""}</div><a class="btn ghost" href="${esc(`${proto}//${t.host}/`)}">Open record</a></li>`).join("")}</ul>` : `<p class="muted">No open tasks recorded. This is not the same as no work; check Sources.</p>`}</div>`;
+	el.innerHTML = `${taskbar}<div class="hh">${h.members
 		.map((m) => {
 			const c = m.card;
 			const href = `${proto}//${m.host}/`;
