@@ -44,3 +44,9 @@ About 20 recordings since July mention the boys. Search: `otter_search` with `ke
 
 ## iOS Voice Memos
 Not reachable directly; Apple has no API. Plan that needs nothing from Matthew day to day: export once from the Mac/iPhone into a Drive folder `FAMILYOS/01_INBOX/voice-memos` (the historical `voice-memo-transcription` repo may already do this; check the registry). Then transcribe and file each memo per boy, the same way as Otter. If nothing is in Drive yet, ask Matthew for a single "share all memos to Drive" step, giving him the exact taps.
+
+## BlueBubbles (iMessage), found 2026-11-02
+- This cloud session **cannot reach Tailscale or the MacBook**, so use the copies already in Drive.
+- Drive folder `FamilyOS/USERID001/IOS/BLUEBUBBLES`: daily `imessage_YYYY-MM-DD.jsonl` files, **22 Sep → 21 Oct 2026 only**, plus older extractor scripts and "SME module" docs. Mostly Matthew ↔ Kellsie (labelled "MOM") coordinating the twins' care.
+- **The pipeline appears to have stopped after 21 Oct.** Its 22 Oct status doc says "no new data". Treat it as a **DEGRADED source**: add a FamilyOS source row for "iMessage (BlueBubbles via MacBook)" and report its last success as 21 Oct. Fixing it needs the MacBook (`bluebubbles_phone_agent.py` daemon), which is a step on Matthew's machine. Give him exact steps or ask for Remote Control access.
+- **To do:** read the jsonl files, then pull only items that are clearly about one boy (feeds, symptoms, appointments, medicines, firsts) into his record as `EXTRACTED`, citing the file and date. Do not import other people's private conversations, and do not copy whole threads. Double-check which twin each item refers to.
