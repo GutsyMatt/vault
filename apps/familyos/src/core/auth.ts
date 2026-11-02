@@ -20,7 +20,7 @@ export interface Jwks {
 }
 export interface Principal {
 	email: string;
-	via: "google" | "access" | "dev";
+	via: "google" | "access" | "dev" | "automation";
 }
 
 export const SESSION_COOKIE = "__Host-fos_gid";
@@ -118,6 +118,32 @@ export function readCookie(request: Request, name: string): string | null {
 	return null;
 }
 
+async function sha256HexOf(s: string): Promise<string> {
+	const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+	return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function timingSafeEqualHex(a: string, b: string): boolean {
+	if (a.length !== b.length) return false;
+	let diff = 0;
+	for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+	return diff === 0;
+}
+
+/**
+ * What the automation key may do: add and read. Never write in a parent's voice or make a
+ * clinical/closing decision: letters, kept moments, quick-log entries, issue status changes,
+ * conflict resolution and settings stay parents-only.
+ */
+export function automationMayCall(method: string, sub: string): boolean {
+	const allowed: [string, RegExp][] = [
+		["GET", /^\/(summary|story|export|whoami)$/],
+		["GET", /^\/issues\/[0-9A-Z]{26}$/],
+		["PUT", /^\/profile$/],
+		["POST", /^\/(life-events|issues|appointments|medications|documents)$/],
+	];
+	return allowed.some(([m, re]) => m === method && re.test(sub));
+}
+
 export type AuthResult =
 	| { ok: true; principal: Principal }
 	| { ok: false; status: 401 | 403 | 503; reason: string; canSignIn: boolean };
@@ -131,6 +157,16 @@ export async function authenticate(request: Request, env: Env): Promise<AuthResu
 	// Local development and tests only: requires *.localhost AND DEV_AUTH_EMAIL.
 	if (env.DEV_AUTH_EMAIL && isLocalHost(url.hostname)) {
 		return { ok: true, principal: { email: env.DEV_AUTH_EMAIL.toLowerCase(), via: "dev" } };
+	}
+	// Claude's automation key (approved by Matthew, 2026-11-02). Compared by SHA-256,
+	// so only the hash lives in config; delete AUTOMATION_TOKEN_SHA256 to revoke.
+	const authz = request.headers.get("authorization") || "";
+	if (env.AUTOMATION_TOKEN_SHA256 && authz.startsWith("Bearer fos_")) {
+		const presented = await sha256HexOf(authz.slice(7));
+		if (timingSafeEqualHex(presented, env.AUTOMATION_TOKEN_SHA256.toLowerCase())) {
+			return { ok: true, principal: { email: "automation:claude", via: "automation" } };
+		}
+		return { ok: false, status: 401, reason: "bad-automation-key", canSignIn: false };
 	}
 	const allowed = allowedEmails(env);
 	const googleOn = !!env.GOOGLE_CLIENT_ID && allowed.length > 0;

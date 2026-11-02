@@ -37,7 +37,9 @@
 		"ALLOWED_EMAILS": "mattherbert01@gmail.com,hnatejkok@gmail.com",
 		"HOST_PERSON_MAP": "{\"callum.libbyhd.org\":\"callum\",\"finnley.libbyhd.org\":\"finnley\"}",
 		"HOUSEHOLD": "{\"hosts\":[\"familyos.libbyhd.org\"],\"members\":[{\"person\":\"callum\",\"host\":\"callum.libbyhd.org\",\"name\":\"Callum\",\"label\":\"Baby A · LEFT\",\"side\":\"left\"},{\"person\":\"finnley\",\"host\":\"finnley.libbyhd.org\",\"name\":\"Finnley\",\"label\":\"Baby B · RIGHT\",\"side\":\"right\"}]}",
-		"APP_VERSION": "0.3.0"
+		// SHA-256 of Claude's automation key (approved by Matthew 2026-11-02). The key itself is never in the repo. Delete this line to revoke.
+		"AUTOMATION_TOKEN_SHA256": "c2b7254aa9340f56556518cfc675dbf56bbeb0ac47f3dc6123fa3dba61635d26",
+		"APP_VERSION": "0.4.0"
 	},
 	"observability": { "enabled": true },
 	"upload_source_maps": true

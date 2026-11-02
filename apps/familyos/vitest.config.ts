@@ -12,6 +12,7 @@ export default defineWorkersConfig({
 				miniflare: {
 					bindings: {
 						DEV_AUTH_EMAIL: "parent@example.test",
+						AUTOMATION_TOKEN_SHA256: "d6d0cb0a563361ca67aa948186c949b9832419a9b5e437a599d5e4bae3d4fe45",
 						HOUSEHOLD: JSON.stringify({
 							hosts: ["familyos.localhost", "familyos.libbyhd.org"],
 							members: [

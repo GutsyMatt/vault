@@ -60,7 +60,7 @@ describe("10. authentication fails closed", () => {
 	it("health check is public and contains no PHI", async () => {
 		const r = await SELF.fetch("https://callum.libbyhd.org/healthz");
 		expect(r.status).toBe(200);
-		expect(await r.json()).toEqual({ ok: true, version: "0.3.0" });
+		expect(await r.json()).toEqual({ ok: true, version: "0.4.0" });
 	});
 
 	it("security headers are set", async () => {
@@ -431,5 +431,43 @@ describe("setup is pre-filled from presentation settings", () => {
 	it("whoami returns this child's name, label and side", async () => {
 		const w = (await (await SELF.fetch(`${C}/api/whoami`)).json()) as any;
 		expect(w.presentation).toMatchObject({ name: "Callum", label: "Baby A · LEFT", side: "left" });
+	});
+});
+
+describe("Claude automation key", () => {
+	const P = "https://callum.libbyhd.org";
+	const auto = (path: string, init: RequestInit = {}, key = "fos_test_synthetic_key_0001") =>
+		SELF.fetch(`${P}${path}`, { ...init, headers: { ...(init.headers || {}), authorization: `Bearer ${key}`, "content-type": "application/json" } });
+	it("can set up a profile and add past events (marked EXTRACTED, actor Claude) on the production host", async () => {
+		const r = await auto("/api/profile", { method: "PUT", body: JSON.stringify({ display_name: "AutoA", birth_date: "2026-06-10", ga_weeks: 34, ga_days: 0 }) });
+		expect(r.status).toBe(201);
+		await r.arrayBuffer();
+		const e = await auto("/api/life-events", { method: "POST", body: JSON.stringify({ on_date: "2026-06-11", title: "Synthetic extracted event" }) });
+		expect(e.status).toBe(201);
+		await e.arrayBuffer();
+		const ex = (await (await auto("/api/export")).json()) as any;
+		const ev = ex.tables.life_events.find((x: any) => x.title === "Synthetic extracted event");
+		expect(ev.verification).toBe("EXTRACTED");
+		expect(ev.actor).toBe("automation:claude");
+	});
+	it("can never write letters, keep moments, log as a parent, change issue status, resolve conflicts or change settings", async () => {
+		for (const [m, p] of [
+			["POST", "/api/letters"],
+			["POST", "/api/keep"],
+			["POST", "/api/log"],
+			["POST", "/api/issues/01ARZ3NDEKTSV4RRFFQ69G5FAV/status"],
+			["POST", "/api/conflicts/01ARZ3NDEKTSV4RRFFQ69G5FAV/resolve"],
+			["PUT", "/api/settings/keepsake-email"],
+			["POST", "/api/keepsakes/compile"],
+		] as const) {
+			const r = await auto(p, { method: m, body: "{}" });
+			expect(r.status, `${m} ${p}`).toBe(403);
+			await r.arrayBuffer();
+		}
+	});
+	it("a wrong key is refused", async () => {
+		const r = await auto("/api/summary", {}, "fos_wrong_key");
+		expect(r.status).toBe(401);
+		await r.arrayBuffer();
 	});
 });
