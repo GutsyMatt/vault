@@ -4,12 +4,13 @@ import { torontoLocalToUtcIso } from "../src/core/util";
 import { computeAges, detectRedFlags, parseRapidLog } from "../src/medical/clinical";
 import { verifyAccessJwt, verifyGoogleIdToken } from "../src/core/auth";
 import { signInPage } from "../src/index";
+import { isGooglePhotoUrl, weekOfLifeForDate } from "../src/family/story";
 import type { PersonVault } from "../src/storage/person-vault";
 
 const C = "http://callum.localhost";
 const F = "http://finnley.localhost";
 const j = (body: unknown) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-const profile = { display_name: "Test A", birth_date: "2026-06-16", ga_weeks: 33, ga_days: 4 };
+const profile = { display_name: "Test A", birth_date: "2026-06-10", ga_weeks: 34, ga_days: 0 }; // synthetic
 
 async function setup(host: string, name = "Test") {
 	const r = await SELF.fetch(`${host}/api/profile`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...profile, display_name: name }) });
@@ -235,10 +236,10 @@ describe("rapid log + safety", () => {
 });
 
 describe("8. time and corrected age", () => {
-	it("corrected age for 33w4d is chronological minus 6w3d", () => {
-		const a = computeAges("2026-06-16", 33, 4, Date.parse("2026-11-02T15:00:00Z"));
-		expect(a.chronologicalDays).toBe(139);
-		expect(a.correctedDays).toBe(139 - 45);
+	it("corrected age for 34w0d is chronological minus 6w0d", () => {
+		const a = computeAges("2026-06-10", 34, 0, Date.parse("2026-11-02T15:00:00Z"));
+		expect(a.chronologicalDays).toBe(145);
+		expect(a.correctedDays).toBe(145 - 42);
 	});
 	it("Toronto wall-clock times convert correctly across DST changes", () => {
 		expect(torontoLocalToUtcIso("2026-10-31T10:00")).toBe("2026-10-31T14:00:00.000Z"); // EDT
@@ -373,5 +374,55 @@ describe("keepsake letters (his own story)", () => {
 		await SELF.fetch(`${C}/api/letters`, j({ signed_as: "Mom", body: "Only-for-A synthetic" }));
 		const fs = (await (await SELF.fetch(`${F}/api/summary`)).json()) as any;
 		expect(JSON.stringify(fs.keepsake)).not.toContain("Only-for-A");
+	});
+});
+
+describe("photos and his story by week", () => {
+	it("week of life: birth day is week 1, day 7 is week 2", () => {
+		expect(weekOfLifeForDate("2026-06-10", "2026-06-10").week).toBe(1);
+		expect(weekOfLifeForDate("2026-06-10", "2026-06-16").week).toBe(1);
+		expect(weekOfLifeForDate("2026-06-10", "2026-06-17")).toMatchObject({ week: 2, start: "2026-06-17", end: "2026-06-23" });
+		expect(weekOfLifeForDate("2026-06-10", "2026-06-01").week).toBeLessThan(1);
+	});
+	it("only Google photo hosts may be fetched", () => {
+		expect(isGooglePhotoUrl("https://lh3.googleusercontent.com/abc")).toBe(true);
+		expect(isGooglePhotoUrl("https://evil.example/abc")).toBe(false);
+		expect(isGooglePhotoUrl("http://lh3.googleusercontent.com/abc")).toBe(false);
+		expect(isGooglePhotoUrl("https://googleusercontent.com.evil.example/x")).toBe(false);
+	});
+	it("imports picked photos into one child, dedupes, never fetches other hosts, and groups by week", async () => {
+		await setup(C, "PhotoA");
+		const stub = env.PERSON_VAULT.get(env.PERSON_VAULT.idFromName("callum"));
+		const fetched: string[] = [];
+		const fake = (async (url: string) => {
+			fetched.push(url);
+			return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00, url.includes("w480") ? 1 : 2]));
+		}) as unknown as typeof fetch;
+		const items = [
+			{ id: "g1", createTime: "2026-06-12T15:00:00Z", baseUrl: "https://lh3.googleusercontent.com/p1" },
+			{ id: "g2", createTime: "2026-06-24T15:00:00Z", baseUrl: "https://evil.example/p2" },
+		];
+		const r1 = await runInDurableObject(stub, (o: PersonVault) => o.importPhotos(items, "tok-synthetic-123", "t@x", fake));
+		expect(r1.results.map((x) => x.status)).toEqual(["saved", "rejected"]);
+		expect(fetched.every((u) => u.startsWith("https://lh3.googleusercontent.com/"))).toBe(true);
+		const r2 = await runInDurableObject(stub, (o: PersonVault) => o.importPhotos([items[0]], "tok-synthetic-123", "t@x", fake));
+		expect(r2.results[0].status).toBe("already-saved");
+		await SELF.fetch(`${C}/api/life-events`, j({ on_date: "2026-06-14", title: "Synthetic event" }));
+		const st = (await (await SELF.fetch(`${C}/api/story`)).json()) as any;
+		const w1 = st.weeks.find((w: any) => w.week === 1);
+		expect(w1.photos.length).toBe(1);
+		expect(w1.events[0].title).toBe("Synthetic event");
+		const img = await SELF.fetch(`${C}/api/photos/${w1.photos[0].id}/image`);
+		expect(img.status).toBe(200);
+		expect(new Uint8Array(await img.arrayBuffer())[4]).toBe(2);
+		const other = await SELF.fetch(`${F}/api/photos/${w1.photos[0].id}/thumb`);
+		expect(other.status).toBe(404);
+		await other.arrayBuffer();
+	});
+	it("photo import refuses oversized batches", async () => {
+		await setup(C, "PhotoA");
+		const r = await SELF.fetch(`${C}/api/photos/import`, j({ token: "tok-synthetic-123", items: new Array(11).fill({ id: "x", baseUrl: "https://lh3.googleusercontent.com/x" }) }));
+		expect(r.status).toBe(400);
+		await r.arrayBuffer();
 	});
 });

@@ -239,11 +239,103 @@ const DELIVERY = {
 	NOT_SENT_NO_ADDRESS: ["s-NOT-CONNECTED", "Saved · no email address set"],
 	FAILED: ["s-DEGRADED", "Email failed"],
 };
+// ---------- His story by week: photos, past events, firsts, letters ----------
+const fmtDay = (ymd) => new Date(ymd + "T12:00:00Z").toLocaleDateString([], { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+async function renderStoryInto(box) {
+	const name = state.profile.display_name;
+	box.innerHTML = `<div class="card"><h2>${esc(name)}'s story</h2>
+		<p class="small muted">Photos and moments from his life, week by week. Photos are copied into his record; the originals stay in your Google Photos.</p>
+		<div class="row"><button id="add-photos">📷 Add photos from Google Photos</button><button class="ghost" id="add-event">+ Add a past event</button></div>
+		<p class="small muted" id="story-meta"></p></div><div id="weeks"><p class="muted">Loading…</p></div>`;
+	$("#add-photos").addEventListener("click", pickPhotos);
+	$("#add-event").addEventListener("click", addLifeEvent);
+	let st;
+	try { st = await api("/story"); } catch (e) { $("#weeks").innerHTML = `<p>${esc(e.message)}</p>`; return; }
+	$("#story-meta").textContent = `${st.photos} photo(s) saved · ${(st.bytes / 1048576).toFixed(0)} MB`;
+	$("#weeks").innerHTML = st.weeks.map((w) => `<div class="card week">
+		<h3>${w.week >= 1 ? `Week ${w.week}` : "Before you were born"}</h3><p class="small muted">${esc(fmtDay(w.start))} – ${esc(fmtDay(w.end))}</p>
+		${w.events.map((e) => `<p><strong>${esc(e.title)}</strong> <span class="small muted">${esc(fmtDay(e.on_date))}</span>${e.note ? `<br><span class="small">${esc(e.note)}</span>` : ""}</p>`).join("")}
+		${w.firsts.map((f) => `<p>⭐ ${esc(f.text)}</p>`).join("")}
+		${w.letters.map((l) => `<p>✉️ Letter from ${esc(l.signed_as)}${l.title ? `: ${esc(l.title)}` : ""}</p>`).join("")}
+		${w.photos.length ? `<div class="thumbs">${w.photos.map((p) => `<a href="/api/photos/${esc(p.id)}/image" target="_blank" rel="noopener"><img loading="lazy" alt="Photo from ${esc(new Date(p.taken_at).toLocaleDateString())}" src="/api/photos/${esc(p.id)}/thumb"></a>`).join("")}</div>` : ""}
+	</div>`).join("") || `<p class="muted">Nothing here yet. Add photos or a past event to start his story.</p>`;
+}
+function addLifeEvent() {
+	const body = sheet("Add a past event", `<form id="ev-form">
+		<label for="ev-date">When</label><input id="ev-date" name="on_date" type="date" required>
+		<label for="ev-title">What happened</label><input id="ev-title" name="title" required placeholder="e.g. Came home from hospital">
+		<label for="ev-note">More (optional)</label><textarea id="ev-note" name="note"></textarea>
+		<p><button type="submit">Save</button></p></form>`);
+	$("#ev-form", body).addEventListener("submit", async (e) => {
+		e.preventDefault();
+		try { await post("/life-events", Object.fromEntries(new FormData(e.target))); $("#sheet").close(); toast("Added to his story."); render(); } catch (err) { sheetError(err.message); }
+	});
+}
+async function pickPhotos() {
+	const body = sheet("Add photos", `<p id="pp-msg">Connecting to Google Photos…</p><progress id="pp-bar" max="1" value="0" hidden></progress><p id="pp-open-wrap" hidden><a class="btn" id="pp-open" target="_blank" rel="noopener">Open Google Photos to choose</a></p>`);
+	const msg = (t) => ($("#pp-msg", body).textContent = t);
+	try {
+		const who = await api("/whoami");
+		if (!who.google_client_id || !window.google?.accounts?.oauth2) throw new Error("Google sign-in isn't available on this page right now. Try again in a moment.");
+		const token = await new Promise((res, rej) => {
+			const tc = google.accounts.oauth2.initTokenClient({
+				client_id: who.google_client_id,
+				scope: "https://www.googleapis.com/auth/photospicker.mediaitems.readonly",
+				callback: (r) => (r.error ? rej(new Error(r.error_description || r.error)) : res(r.access_token)),
+				error_callback: (e) => rej(new Error(e.type === "popup_closed" ? "Google window was closed." : e.message || e.type)),
+			});
+			tc.requestAccessToken();
+		});
+		const g = async (path, opts = {}) => {
+			const r = await fetch(`https://photospicker.googleapis.com/v1/${path}`, { ...opts, headers: { authorization: `Bearer ${token}`, ...(opts.headers || {}) } });
+			if (!r.ok) throw new Error(`Google Photos said ${r.status}. ${r.status === 403 ? "The Photos Picker API may need to be turned on for the LifeOS Google project." : ""}`);
+			return r.status === 204 ? null : r.json();
+		};
+		let session = await g("sessions", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+		msg("Tap the button, pick his photos (you can select many at once), then tap Done in Google Photos.");
+		$("#pp-open", body).href = `${session.pickerUri}/autoclose`;
+		$("#pp-open-wrap", body).hidden = false;
+		const started = Date.now();
+		while (!session.mediaItemsSet) {
+			if (Date.now() - started > 45 * 60000) throw new Error("Timed out waiting for photos to be chosen.");
+			await new Promise((r) => setTimeout(r, Math.max(2000, parseFloat(session.pollingConfig?.pollInterval || "4") * 1000)));
+			session = await g(`sessions/${session.id}`);
+		}
+		$("#pp-open-wrap", body).hidden = true;
+		msg("Getting the list of photos…");
+		const items = [];
+		let pageToken = "";
+		do {
+			const page = await g(`mediaItems?sessionId=${encodeURIComponent(session.id)}&pageSize=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`);
+			items.push(...(page.mediaItems || []));
+			pageToken = page.nextPageToken || "";
+		} while (pageToken);
+		const photos = items.filter((m) => m.type === "PHOTO");
+		const skipped = items.length - photos.length;
+		const bar = $("#pp-bar", body);
+		bar.hidden = false;
+		bar.max = photos.length;
+		const tally = { saved: 0, "already-saved": 0, "download-failed": 0, rejected: 0 };
+		for (let i = 0; i < photos.length; i += 5) {
+			const batch = photos.slice(i, i + 5).map((m) => ({ id: m.id, createTime: m.createTime, baseUrl: m.mediaFile?.baseUrl, filename: m.mediaFile?.filename, width: m.mediaFile?.mediaFileMetadata?.width, height: m.mediaFile?.mediaFileMetadata?.height }));
+			const r = await post("/photos/import", { token, items: batch });
+			for (const x of r.results) tally[x.status] = (tally[x.status] || 0) + 1;
+			bar.value = Math.min(photos.length, i + 5);
+			msg(`Saving… ${bar.value} of ${photos.length}`);
+		}
+		try { await g(`sessions/${session.id}`, { method: "DELETE" }); } catch {}
+		msg(`Done. ${tally.saved} saved${tally["already-saved"] ? `, ${tally["already-saved"]} were already here` : ""}${tally["download-failed"] ? `, ${tally["download-failed"]} failed (try those again)` : ""}${skipped ? `, ${skipped} video(s) skipped for now` : ""}.`);
+		render();
+	} catch (e) {
+		msg(e.message);
+	}
+}
+
 function renderLetters() {
 	const k = state.keepsake;
 	const name = state.profile.display_name;
 	const el = $('[data-panel="letters"]');
-	el.innerHTML = `
+	el.innerHTML = `<div id="story-box"></div>
 	<div class="card"><h2>Write to ${esc(name)}</h2>
 		<p class="small muted">For him to read when he's older. Your words go into his letter for this month, exactly as you write them.</p>
 		<form id="letter-form">
@@ -268,6 +360,7 @@ function renderLetters() {
 		<form id="k-email" class="row"><input type="email" name="email" aria-label="His email address" value="${esc(k.email || "")}" placeholder="his email address"><button type="submit">Save</button></form>
 		<p class="small muted">Every letter is also kept here permanently and in the full export, even if email fails.</p>
 	</div>`;
+	renderStoryInto($("#story-box"));
 	$("#letter-form").addEventListener("submit", async (e) => {
 		e.preventDefault();
 		try { await post("/letters", Object.fromEntries(new FormData(e.target))); toast("Letter saved for him."); await load(); } catch (err) { toast(err.message); }
