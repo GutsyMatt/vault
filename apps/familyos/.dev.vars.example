@@ -1,4 +1,4 @@
 # Copy to .dev.vars for local development. Never commit .dev.vars.
 DEV_AUTH_EMAIL=parent@example.test
 HOST_PERSON_MAP={"callum.localhost":"callum","finnley.localhost":"finnley"}
-HOUSEHOLD={"hosts":["familyos.localhost"],"members":[{"person":"callum","host":"callum.localhost:8787"},{"person":"finnley","host":"finnley.localhost:8788"}]}
+HOUSEHOLD={"hosts":["familyos.localhost"],"members":[{"person":"callum","host":"callum.localhost:8787","name":"Callum","label":"Baby A · LEFT","side":"left"},{"person":"finnley","host":"finnley.localhost:8788","name":"Finnley","label":"Baby B · RIGHT","side":"right"}]}

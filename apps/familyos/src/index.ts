@@ -70,7 +70,7 @@ const DENIED_HTML = (msg: string) =>
 
 interface HouseholdConfig {
 	hosts: string[];
-	members: { person: string; host: string }[]; // display order: left → right
+	members: { person: string; host: string; name?: string; label?: string; side?: string }[]; // display order: left → right; name/label/side are presentation only
 }
 
 export function personForHost(env: Env, hostname: string): string | null {
@@ -189,7 +189,7 @@ export default {
 
 		if (url.pathname === "/api/whoami") {
 			return withHeaders(
-				Response.json({ email: auth.principal.email, via: auth.principal.via, mode: isHousehold ? "household" : "person", person, google_client_id: env.GOOGLE_CLIENT_ID ?? null }),
+				Response.json({ email: auth.principal.email, via: auth.principal.via, mode: isHousehold ? "household" : "person", person, google_client_id: env.GOOGLE_CLIENT_ID ?? null, presentation: hh.members.find((m) => m.person === person) ?? null }),
 				NOSTORE,
 			);
 		}

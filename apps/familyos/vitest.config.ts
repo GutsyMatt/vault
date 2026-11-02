@@ -15,7 +15,7 @@ export default defineWorkersConfig({
 						HOUSEHOLD: JSON.stringify({
 							hosts: ["familyos.localhost", "familyos.libbyhd.org"],
 							members: [
-								{ person: "callum", host: "callum.localhost" },
+								{ person: "callum", host: "callum.localhost", name: "Callum", label: "Baby A · LEFT", side: "left" },
 								{ person: "finnley", host: "finnley.localhost" },
 							],
 						}),

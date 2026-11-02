@@ -36,7 +36,7 @@
 		// Parents. Each must also be a test user on the LifeOS Google OAuth consent screen while it is in testing mode.
 		"ALLOWED_EMAILS": "mattherbert01@gmail.com,hnatejkok@gmail.com",
 		"HOST_PERSON_MAP": "{\"callum.libbyhd.org\":\"callum\",\"finnley.libbyhd.org\":\"finnley\"}",
-		"HOUSEHOLD": "{\"hosts\":[\"familyos.libbyhd.org\"],\"members\":[{\"person\":\"callum\",\"host\":\"callum.libbyhd.org\"},{\"person\":\"finnley\",\"host\":\"finnley.libbyhd.org\"}]}",
+		"HOUSEHOLD": "{\"hosts\":[\"familyos.libbyhd.org\"],\"members\":[{\"person\":\"callum\",\"host\":\"callum.libbyhd.org\",\"name\":\"Callum\",\"label\":\"Baby A · LEFT\",\"side\":\"left\"},{\"person\":\"finnley\",\"host\":\"finnley.libbyhd.org\",\"name\":\"Finnley\",\"label\":\"Baby B · RIGHT\",\"side\":\"right\"}]}",
 		"APP_VERSION": "0.3.0"
 	},
 	"observability": { "enabled": true },
