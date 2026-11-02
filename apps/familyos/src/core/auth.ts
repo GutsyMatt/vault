@@ -23,7 +23,17 @@ export interface Principal {
 	via: "google" | "access" | "dev" | "automation";
 }
 
-export const SESSION_COOKIE = "__Host-fos_gid";
+export const SESSION_COOKIE = "fos_gid";
+export const LEGACY_SESSION_COOKIE = "__Host-fos_gid";
+
+export function sessionCookie(request: Request, value: string, maxAge: number): string {
+	const hostname = new URL(request.url).hostname.toLowerCase();
+	const shared = hostname === "libbyhd.org" || hostname.endsWith(".libbyhd.org");
+	return `${SESSION_COOKIE}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax${shared ? "; Domain=.libbyhd.org" : ""}; Max-Age=${maxAge}`;
+}
+export function legacySessionCookie(value: string, maxAge: number): string {
+	return `${LEGACY_SESSION_COOKIE}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+}
 const GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"];
 const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
 
@@ -191,7 +201,7 @@ export async function authenticate(request: Request, env: Env): Promise<AuthResu
 
 	// Google sign-in session cookie.
 	if (googleOn) {
-		const token = readCookie(request, SESSION_COOKIE);
+		const token = readCookie(request, SESSION_COOKIE) || readCookie(request, LEGACY_SESSION_COOKIE);
 		if (!token) return { ok: false, status: 401, reason: "no-session", canSignIn: true };
 		let c: { email: string } | null = null;
 		try {
