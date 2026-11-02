@@ -6,6 +6,7 @@ import { verifyAccessJwt, verifyGoogleIdToken } from "../src/core/auth";
 import { signInPage } from "../src/index";
 import { isGooglePhotoUrl, weekOfLifeForDate } from "../src/family/story";
 import type { PersonVault } from "../src/storage/person-vault";
+import { parseCcda, parseXml, splitMedicationName } from "../src/medical/ccda";
 
 const C = "http://callum.localhost";
 const F = "http://finnley.localhost";
@@ -469,5 +470,271 @@ describe("Claude automation key", () => {
 		const r = await auto("/api/summary", {}, "fos_wrong_key");
 		expect(r.status).toBe(401);
 		await r.arrayBuffer();
+	});
+});
+
+// ---------- MyChart exports (C-CDA). Synthetic values only. ----------
+const BIRTH = profile.birth_date;
+
+/** A small C-CDA in the shape Epic's MyChart export uses (narrative references, organizers). */
+function cda({ given, birth = "20260610", med = "Synthmed 5 mg/mL oral solution", tag = "A" }: { given: string; birth?: string; med?: string; tag?: string }) {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE ClinicalDocument [<!ENTITY boom "should never be expanded">]>
+<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:sdtc="urn:hl7-org:sdtc">
+  <title>Synthetic Health Summary ${tag}</title>
+  <effectiveTime value="20261030120000-0400"/>
+  <recordTarget><patientRole><patient>
+    <name><given>${given}</given><given>Middle</given><family>Testfamily</family></name>
+    <birthTime value="${birth}"/>
+  </patient></patientRole></recordTarget>
+  <custodian><assignedCustodian><representedCustodianOrganization><name>Synthetic Hospital &amp; Clinics</name></representedCustodianOrganization></assignedCustodian></custodian>
+  <component><structuredBody>
+    <component><section>
+      <code code="48765-2" codeSystem="2.16.840.1.113883.6.1"/>
+      <text><table><tbody><tr ID="allergy1"><td>Syntheticillin</td></tr></tbody></table></text>
+      <entry><act classCode="ACT" moodCode="EVN"><statusCode code="active"/>
+        <entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN">
+          <effectiveTime><low value="20260620"/></effectiveTime>
+          <participant typeCode="CSM"><participantRole><playingEntity>
+            <code><originalText><reference value="#allergy1"/></originalText></code>
+          </playingEntity></participantRole></participant>
+          <entryRelationship typeCode="MFST" inversionInd="true"><observation classCode="OBS" moodCode="EVN">
+            <code code="ASSERTION"/><value xsi:type="CD" displayName="Hives"/>
+            <entryRelationship typeCode="SUBJ" inversionInd="true"><observation classCode="OBS" moodCode="EVN"><code code="SEV"/><value xsi:type="CD" displayName="Severe"/></observation></entryRelationship>
+          </observation></entryRelationship>
+        </observation></entryRelationship>
+      </act></entry>
+    </section></component>
+    <component><section>
+      <code code="11450-4"/>
+      <entry><act classCode="ACT" moodCode="EVN"><statusCode code="active"/>
+        <entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN">
+          <effectiveTime><low value="20260611"/></effectiveTime>
+          <value xsi:type="CD" displayName="Synthetic condition ${tag}"/>
+        </observation></entryRelationship>
+      </act></entry>
+    </section></component>
+    <component><section>
+      <code code="11369-6"/>
+      <entry><substanceAdministration classCode="SBADM" moodCode="EVN" negationInd="false">
+        <statusCode code="completed"/><effectiveTime value="20260819"/>
+        <consumable><manufacturedProduct><manufacturedMaterial><code displayName="Synthetic vaccine"/></manufacturedMaterial></manufacturedProduct></consumable>
+      </substanceAdministration></entry>
+    </section></component>
+    <component><section>
+      <code code="30954-2"/>
+      <entry><organizer classCode="BATTERY" moodCode="EVN"><component><observation classCode="OBS" moodCode="EVN">
+        <code displayName="Synthetic analyte"/><effectiveTime value="20261021"/>
+        <value xsi:type="PQ" value="142" unit="mg/dL"/><interpretationCode code="H"/>
+        <referenceRange><observationRange><value xsi:type="IVL_PQ"><low value="0" unit="mg/dL"/><high value="99" unit="mg/dL"/></value></observationRange></referenceRange>
+      </observation></component></organizer></entry>
+    </section></component>
+    <component><section>
+      <code code="8716-3"/>
+      <entry><organizer classCode="CLUSTER" moodCode="EVN"><component><observation classCode="OBS" moodCode="EVN">
+        <code code="29463-7" displayName="Body weight"/><effectiveTime value="20260620"/><value xsi:type="PQ" value="1957" unit="g"/>
+      </observation></component></organizer></entry>
+    </section></component>
+    <component><section>
+      <code code="46240-8"/>
+      <entry><encounter classCode="ENC" moodCode="EVN">
+        <code displayName="Office Visit"/><effectiveTime><low value="20260923100000-0400"/></effectiveTime>
+        <performer><assignedEntity><assignedPerson><name><given>Pat</given><family>Synthetic</family></name></assignedPerson></assignedEntity></performer>
+        <participant typeCode="LOC"><participantRole><playingEntity><name>Synthetic Clinic</name></playingEntity></participantRole></participant>
+      </encounter></entry>
+    </section></component>
+    <component><section>
+      <code code="10160-0"/>
+      <text><list><item ID="med1">${med}</item><item ID="sig1">Give 0.3 mL by mouth three times daily</item></list></text>
+      <entry><substanceAdministration classCode="SBADM" moodCode="INT">
+        <text><reference value="#sig1"/></text><statusCode code="active"/>
+        <effectiveTime xsi:type="IVL_TS"><low value="20260901"/></effectiveTime>
+        <effectiveTime xsi:type="PIVL_TS" operator="A"><period value="8" unit="h"/></effectiveTime>
+        <consumable><manufacturedProduct><manufacturedMaterial><code><originalText><reference value="#med1"/></originalText></code></manufacturedMaterial></manufacturedProduct></consumable>
+      </substanceAdministration></entry>
+      <entry><substanceAdministration classCode="SBADM" moodCode="INT">
+        <statusCode code="completed"/>
+        <consumable><manufacturedProduct><manufacturedMaterial><code displayName="Oldmed 10 mg tablet"/></manufacturedMaterial></manufacturedProduct></consumable>
+      </substanceAdministration></entry>
+    </section></component>
+  </structuredBody></component>
+</ClinicalDocument>`;
+}
+
+/** Builds a zip like MyChart's download (IHE XDM layout); deflates entries when asked. */
+async function zip(files: Record<string, string>, deflate = true) {
+	const enc = new TextEncoder();
+	const local: Uint8Array[] = [];
+	const central: Uint8Array[] = [];
+	let offset = 0;
+	for (const [name, text] of Object.entries(files)) {
+		const raw = enc.encode(text);
+		const data = deflate ? new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream("deflate-raw"))).arrayBuffer()) : raw;
+		const n = enc.encode(name);
+		const lh = new DataView(new ArrayBuffer(30));
+		lh.setUint32(0, 0x04034b50, true);
+		lh.setUint16(8, deflate ? 8 : 0, true);
+		lh.setUint32(18, data.length, true);
+		lh.setUint32(22, raw.length, true);
+		lh.setUint16(26, n.length, true);
+		const ch = new DataView(new ArrayBuffer(46));
+		ch.setUint32(0, 0x02014b50, true);
+		ch.setUint16(10, deflate ? 8 : 0, true);
+		ch.setUint32(20, data.length, true);
+		ch.setUint32(24, raw.length, true);
+		ch.setUint16(28, n.length, true);
+		ch.setUint32(42, offset, true);
+		local.push(new Uint8Array(lh.buffer), n, data);
+		central.push(new Uint8Array(ch.buffer), n);
+		offset += 30 + n.length + data.length;
+	}
+	const cdSize = central.reduce((a, b) => a + b.length, 0);
+	const end = new DataView(new ArrayBuffer(22));
+	end.setUint32(0, 0x06054b50, true);
+	end.setUint16(8, Object.keys(files).length, true);
+	end.setUint16(10, Object.keys(files).length, true);
+	end.setUint32(12, cdSize, true);
+	end.setUint32(16, offset, true);
+	return new Blob([...local, ...central, new Uint8Array(end.buffer)] as BlobPart[]);
+}
+
+const importFile = (host: string, body: BodyInit, filename = "health-summary.xml") =>
+	SELF.fetch(`${host}/api/mychart-import?filename=${encodeURIComponent(filename)}`, { method: "POST", headers: { "content-type": "application/octet-stream" }, body });
+
+describe("MyChart export reader (C-CDA)", () => {
+	it("reads patient, allergies, problems, immunizations, results, growth, visits and medications", () => {
+		const d = parseCcda(cda({ given: "Kidone" }));
+		expect(d.patient).toEqual({ given: ["Kidone", "Middle"], family: "Testfamily", birth_date: "2026-06-10" });
+		expect(d.organization).toBe("Synthetic Hospital & Clinics");
+		expect(d.created).toBe("2026-10-30");
+		const by = (k: string) => d.entries.filter((e) => e.kind === k);
+		expect(by("allergy")).toEqual([{ kind: "allergy", on_date: "2026-06-20", title: "Syntheticillin", value: "Hives", status: "Severe" }]);
+		expect(by("problem")[0]).toMatchObject({ title: "Synthetic condition A", on_date: "2026-06-11", status: "active" });
+		expect(by("immunization")[0]).toMatchObject({ title: "Synthetic vaccine", on_date: "2026-08-19" });
+		expect(by("result")[0]).toMatchObject({ title: "Synthetic analyte", value: "142", unit: "mg/dL", ref_range: "0–99 mg/dL", flag: "high", on_date: "2026-10-21" });
+		expect(by("vital")[0]).toMatchObject({ title: "Body weight", value: "1957", unit: "g" });
+		expect(by("encounter")[0]).toMatchObject({ title: "Office Visit", on_date: "2026-09-23", value: "Pat Synthetic · Synthetic Clinic" });
+		expect(d.medications).toEqual([
+			expect.objectContaining({ name: "Synthmed", strength: "5 mg/mL", form: "oral solution", dose_text: "Give 0.3 mL by mouth three times daily", frequency: "every 8 hours", start: "2026-09-01", active: true }),
+			expect.objectContaining({ name: "Oldmed", strength: "10 mg", active: false }),
+		]);
+	});
+
+	it("never expands DOCTYPE entities and rejects malformed XML", () => {
+		const root = parseXml('<!DOCTYPE x [<!ENTITY e "EXPANDED">]><a>&e; &lt;b&gt; &#65;</a>');
+		expect(root.children[0].text).toBe("&e; <b> A");
+		expect(() => parseXml("<a><b></a>")).toThrow();
+		expect(() => parseCcda("<html></html>")).toThrow(/clinical document/);
+	});
+
+	it("splits medication labels into name, strength and form", () => {
+		expect(splitMedicationName("Synthmed 1 mg/mL oral suspension")).toEqual({ name: "Synthmed", strength: "1 mg/mL", form: "oral suspension" });
+		expect(splitMedicationName("Ferrous thing 15 mg/0.6 mL drops")).toEqual({ name: "Ferrous thing", strength: "15 mg/0.6 mL", form: "drops" });
+		expect(splitMedicationName("Vitamin drops")).toEqual({ name: "Vitamin drops", strength: null, form: null });
+	});
+});
+
+describe("MyChart import into one child's record", () => {
+	it("imports a matching export as CLINICAL_RECORD entries linked to the stored original", async () => {
+		await setup(C, "Importkid");
+		const r = await importFile(C, cda({ given: "Importkid", tag: "import" }));
+		expect(r.status).toBe(201);
+		const out = (await r.json()) as any;
+		expect(out.added).toMatchObject({ allergy: 1, problem: 1, immunization: 1, result: 1, vital: 1, encounter: 1, medication: 2 });
+		expect(out.patient_check).toBe("name and birth date match");
+		const s = (await (await SELF.fetch(`${C}/api/summary`)).json()) as any;
+		const problem = s.clinical_record.problems.find((p: any) => p.title === "Synthetic condition import");
+		expect(problem).toMatchObject({ verification: "CLINICAL_RECORD", document_id: out.document_id });
+		expect(s.documents.find((d: any) => d.id === out.document_id)).toMatchObject({ verification: "CLINICAL_RECORD", mime: "application/xml" });
+		expect(s.sources.find((x: any) => x.kind === "mychart-export").status).toBe("IMPORTED");
+		const old = s.medications.find((m: any) => m.name === "Oldmed");
+		expect(old.status).toBe("historical"); // a stopped medicine is kept, never shown as current
+		// The original is retrievable byte-for-byte.
+		const raw = await SELF.fetch(`${C}/api/documents/${out.document_id}/raw`);
+		expect(await raw.text()).toContain("Synthetic Health Summary import");
+	});
+
+	it("refuses an export for the other twin (same birth date, different name) and stores nothing", async () => {
+		await setup(F, "Ftwin");
+		const before = (await (await SELF.fetch(`${F}/api/export`)).json()) as any;
+		const r = await importFile(F, cda({ given: "Othertwin", tag: "wrong-twin" }));
+		expect(r.status).toBe(422);
+		expect(((await r.json()) as any).error).toMatch(/not for Ftwin/);
+		const wrongBirth = await importFile(F, cda({ given: "Ftwin", birth: "20260611", tag: "wrong-birth" }));
+		expect(wrongBirth.status).toBe(422);
+		await wrongBirth.arrayBuffer();
+		const after = (await (await SELF.fetch(`${F}/api/export`)).json()) as any;
+		expect(after.tables.documents.length).toBe(before.tables.documents.length);
+		expect(after.tables.clinical_entries.length).toBe(before.tables.clinical_entries.length);
+		expect(JSON.stringify(after.tables.clinical_entries)).not.toMatch(/wrong-twin|wrong-birth/);
+	});
+
+	it("importing the same export again adds nothing", async () => {
+		await setup(C, "Againkid");
+		const xml = cda({ given: "Againkid", tag: "again" });
+		await (await importFile(C, xml)).arrayBuffer();
+		const r = (await (await importFile(C, xml)).json()) as any;
+		expect(r.duplicate).toBe(true);
+		expect(Object.values(r.added).every((n) => n === 0)).toBe(true);
+		expect(r.already_had).toBeGreaterThan(0);
+	});
+
+	it("a strength that differs from the family's record is flagged as a CONFLICT, never resolved automatically", async () => {
+		await setup(F, "Conflictkid");
+		const mine = (await (await SELF.fetch(`${F}/api/medications`, j({ name: "Conflictmed", strength: "1 mg/mL", verification: "PARENT_REPORT" }))).json()) as any;
+		const r = (await (await importFile(F, cda({ given: "Conflictkid", med: "Conflictmed 5 mg/mL oral solution", tag: "conflict" }))).json()) as any;
+		expect(r.conflict_ids).toHaveLength(1);
+		const s = (await (await SELF.fetch(`${F}/api/summary`)).json()) as any;
+		const c = s.conflicts.find((x: any) => x.id === r.conflict_ids[0]);
+		expect(c.item_ids).toContain(mine.id);
+		expect(c.description).toContain("Do not calculate a dose");
+	});
+
+	it("reads MyChart's zip download and puts allergies in the visit brief", async () => {
+		await setup(C, "Zipkid");
+		const file = await zip({
+			"IHE_XDM/SUBSET01/METADATA.XML": "<Metadata/>",
+			"IHE_XDM/SUBSET01/DOC0001.XML": cda({ given: "Zipkid", tag: "zip1" }),
+			"IHE_XDM/SUBSET01/DOC0002.XML": cda({ given: "Zipkid", tag: "zip2" }),
+			"IHE_XDM/SUBSET01/STYLE.XSL": "<xsl/>",
+			"INDEX.HTM": "<html></html>",
+		});
+		const r = await importFile(C, file, "HealthSummary.zip");
+		expect(r.status).toBe(201);
+		const out = (await r.json()) as any;
+		expect(out.documents).toBe(2);
+		expect(out.added.problem).toBe(2);
+		const stored = (await (await SELF.fetch(`${C}/api/summary`)).json()) as any;
+		expect(stored.documents.find((d: any) => d.id === out.document_id).mime).toBe("application/zip");
+		const appt = (await (await SELF.fetch(`${C}/api/appointments`, j({ title: "Synthetic visit", starts_local: "2031-01-10T10:00" }))).json()) as any;
+		const brief = (await (await SELF.fetch(`${C}/api/appointments/${appt.id}/brief`)).json()) as any;
+		const allergies = brief.content.sections.find((x: any) => x.heading === "Allergies on record");
+		expect(allergies.items.some((i: any) => i.text === "Syntheticillin: Hives (Severe)" && i.verification === "CLINICAL_RECORD")).toBe(true);
+		const stored0 = await importFile(C, await zip({ "DOC0001.XML": cda({ given: "Zipkid", tag: "stored" }) }, false), "stored.zip");
+		expect(stored0.status).toBe(201);
+		await stored0.arrayBuffer();
+	});
+
+	it("rejects files that aren't a MyChart export", async () => {
+		await setup(C, "Rejectkid");
+		for (const body of ["just some text", "<html><body>hello</body></html>", await zip({ "readme.txt": "hi" })]) {
+			const r = await importFile(C, body);
+			expect(r.status).toBe(422);
+			await r.arrayBuffer();
+		}
+	});
+
+	it("Claude's automation key can import an export; entries record who imported them", async () => {
+		const P = "https://finnley.libbyhd.org";
+		const auth = { authorization: "Bearer fos_test_synthetic_key_0001" };
+		const p = await SELF.fetch(`${P}/api/profile`, { method: "PUT", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ display_name: "Autokid", birth_date: BIRTH, ga_weeks: 34, ga_days: 0 }) });
+		expect(p.status).toBe(201);
+		await p.arrayBuffer();
+		const r = await SELF.fetch(`${P}/api/mychart-import?filename=x.xml`, { method: "POST", headers: { ...auth, "content-type": "application/octet-stream" }, body: cda({ given: "Autokid", tag: "auto" }) });
+		expect(r.status).toBe(201);
+		await r.arrayBuffer();
+		const ex = (await (await SELF.fetch(`${P}/api/export`, { headers: auth })).json()) as any;
+		const e = ex.tables.clinical_entries.find((x: any) => x.title === "Synthetic condition auto");
+		expect(e).toMatchObject({ actor: "automation:claude", verification: "CLINICAL_RECORD" });
 	});
 });

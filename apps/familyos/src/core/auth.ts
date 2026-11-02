@@ -139,7 +139,7 @@ export function automationMayCall(method: string, sub: string): boolean {
 		["GET", /^\/(summary|story|export|whoami)$/],
 		["GET", /^\/issues\/[0-9A-Z]{26}$/],
 		["PUT", /^\/profile$/],
-		["POST", /^\/(life-events|issues|appointments|medications|documents)$/],
+		["POST", /^\/(life-events|issues|appointments|medications|documents|mychart-import)$/],
 	];
 	return allowed.some(([m, re]) => m === method && re.test(sub));
 }
