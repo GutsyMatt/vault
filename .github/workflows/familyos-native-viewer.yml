@@ -1,0 +1,52 @@
+name: Native offline viewer binaries
+on:
+  pull_request:
+    paths:
+      - 'tools/offline-viewer.mjs'
+      - 'tools/familyos-portable-archive.mjs'
+      - 'tools/portable-launcher.mjs'
+      - 'tools/build-portable-sea.mjs'
+      - '.github/workflows/familyos-native-viewer.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-and-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x64
+            bin: familyos-viewer.exe
+          - os: macos-15-intel
+            target: macos-intel
+            bin: familyos-viewer
+          - os: macos-latest
+            target: macos-apple-silicon
+            bin: familyos-viewer
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated packaging tools
+        run: npm install --no-save --ignore-scripts --package-lock=false esbuild@0.25.12 postject@1.0.0-alpha.6
+      - name: Build native executable
+        run: node tools/build-portable-sea.mjs
+      - name: Smoke-test executable with synthetic invalid input
+        shell: bash
+        run: |
+          set +e
+          "dist/portable/${{ matrix.bin }}" does-not-exist > smoke.txt 2>&1
+          code=$?
+          cat smoke.txt
+          if [ "$code" -ne 1 ]; then echo "Expected controlled failure, got $code"; exit 1; fi
+      - name: Upload native executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: familyos-viewer-${{ matrix.target }}
+          path: dist/portable/${{ matrix.bin }}
+          if-no-files-found: error
