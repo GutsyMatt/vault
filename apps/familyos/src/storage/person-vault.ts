@@ -954,6 +954,7 @@ export class PersonVault extends DurableObject<Env> {
 			ages: s.ages,
 			next_appointment: s.next_appointment ? { id: s.next_appointment.id, title: s.next_appointment.title, when: s.next_appointment.when, details_verified: !!s.next_appointment.details_verified } : null,
 			open_issues: s.issues.length,
+			tasks: s.issues.map((i: Row) => ({ id: i.id, title: i.title, status: i.status, next_action: i.next_action, due_date: i.due_date, overdue: i.overdue, verification: i.verification })),
 			overdue: s.issues.filter((i: Row) => i.overdue).map((i: Row) => ({ title: i.title, next_action: i.next_action, due_date: i.due_date })),
 			conflicts: s.conflicts.map((c: Row) => c.subject),
 			meds_needing_check: s.medications.filter((m: Row) => m.status === "unverified" || m.in_conflict).length,

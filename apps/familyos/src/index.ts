@@ -9,7 +9,7 @@
  * (Cloudflare Access JWT, fail closed) → hostname selects person or household →
  * that person's Durable Object handles /api/*; static shell otherwise.
  */
-import { SESSION_COOKIE, allowedEmails, authenticate, automationMayCall, googleJwks, verifyGoogleIdToken } from "./core/auth";
+import { allowedEmails, authenticate, automationMayCall, googleJwks, legacySessionCookie, sessionCookie, verifyGoogleIdToken } from "./core/auth";
 import { MAX_UPLOAD } from "./storage/person-vault";
 import type { Env } from "./types";
 
@@ -118,7 +118,7 @@ async function googleSignIn(request: Request, env: Env): Promise<Response> {
 		return Response.json({ error: "This Google account isn't approved for this site." }, { status: 403 });
 	}
 	const maxAge = Math.max(0, id.exp - Math.floor(Date.now() / 1000));
-	return new Response(null, { status: 204, headers: { "set-cookie": `${SESSION_COOKIE}=${credential}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${maxAge}` } });
+	return new Response(null, { status: 204, headers: { "set-cookie": sessionCookie(request, credential, maxAge) } });
 }
 
 const vault = (env: Env, person: string) => env.PERSON_VAULT.get(env.PERSON_VAULT.idFromName(person));
@@ -145,7 +145,10 @@ export default {
 
 		if (url.pathname === "/auth/google" && request.method === "POST") return withHeaders(await googleSignIn(request, env), NOSTORE);
 		if (url.pathname === "/auth/signout" && request.method === "POST") {
-			return withHeaders(new Response(null, { status: 204, headers: { "set-cookie": `${SESSION_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0` } }), NOSTORE);
+			const headers = new Headers();
+			headers.append("set-cookie", sessionCookie(request, "", 0));
+			headers.append("set-cookie", legacySessionCookie("", 0));
+			return withHeaders(new Response(null, { status: 204, headers }), NOSTORE);
 		}
 
 		const isApi = url.pathname.startsWith("/api/");

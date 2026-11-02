@@ -584,7 +584,9 @@ async function loadHousehold() {
 	$("#ages").textContent = "Both boys at a glance. Tap a name to open his record.";
 	$("#fresh").textContent = `Updated ${new Date(h.generated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`;
 	const proto = location.protocol;
-	el.innerHTML = `<div class="hh">${h.members
+	const tasks = h.members.flatMap((m) => (m.card?.tasks || []).map((t) => ({ ...t, person: m.person, host: m.host, display_name: m.card?.profile?.display_name || m.person })));
+	const taskbar = `<section class="taskbar${tasks.length ? "" : " taskbar-empty"}" aria-labelledby="taskbar-title"><div class="row between"><h2 id="taskbar-title">${tasks.length ? "Needs attention" : "All clear"}</h2>${tasks.length ? `<span class="badge">${tasks.length}</span>` : ""}</div>${tasks.length ? `<div class="task-list">${tasks.map((t) => `<a class="task${t.overdue ? " task-overdue" : ""}" href="${esc(`${proto}//${t.host}/`)}"><span class="task-dot" aria-hidden="true"></span><span class="task-copy"><strong>${esc(t.title)}</strong><span>${esc(t.display_name)}${t.next_action ? ` · ${esc(t.next_action)}` : ` · ${esc(nice(t.status))}`}</span></span><span class="task-arrow" aria-hidden="true">›</span></a>`).join("")}</div>` : `<p class="muted">No open issues are recorded.</p>`}</section>`;
+	el.innerHTML = `${taskbar}<div class="hh">${h.members
 		.map((m) => {
 			const c = m.card;
 			const href = `${proto}//${m.host}/`;
