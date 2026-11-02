@@ -80,6 +80,19 @@ These are **logical groupings, implemented as modules or packages first.** Split
 | `platform-infrastructure` | Deployment and IaC, Cloudflare, local core (Toshiba/Tailscale/Home Assistant/Ollama), monitoring, backup, security |
 | `natico-public` | Public site and reusable public-safe advocacy resources, independently governed |
 
+**Superseded proposal, for reconciliation:** an earlier plan proposed a `familyos` org with six repos. It was replaced because it put advocacy and the shared foundation *under* FamilyOS, when they belong to the whole platform. Map, don't duplicate:
+
+| Earlier `familyos/` repo | Goes to |
+|---|---|
+| `familyos-core` (identity-and-permissions, event-processing, provenance, audit) | Shared foundation: `platform-governance` (identity and permission model) plus `libby-platform` (event, provenance and audit packages) |
+| `familyos-medical` (clinical-data-schemas, appointment-intelligence, medication-reconciliation, referral-tracking) | LifeOS health domain in `libby-platform`. It is per person and reused for Matthew and Kellsie, not FamilyOS-only. |
+| `familyos-advocacy` (disability-support-workflows, benefits-case-management, evidence-reconciliation) | SENTINEL (evidence reconciliation) plus LifeOS and NATICO advocacy. Not built in the first slice. |
+| `familyos-connectors` (google-drive, google-calendar, gmail, github) | Connectors package in `libby-platform` |
+| `familyos-web` (parent-dashboard, callum-portal, finnley-portal) | `familyos-app`, seeded from this repo. **This is Part II.** |
+| `familyos-infrastructure` (deployment, monitoring, backup, security) | `platform-infrastructure` |
+
+If any of these repos already exist on GitHub, add them to the registry (§I.6) as assets to audit. Don't treat them as a competing plan.
+
 **Right now:** you only have `gutsymatt/vault`. Phase 0 classified it: it is a Cloudflare Workers template already wired to Workers Builds. It becomes the **seed of `familyos-app`**, with a `packages/`-style layout so the shared schema and core can later move to `libby-platform` without a rewrite. Creating the org or new repos, or moving or renaming existing repos, is a **migration action that needs explicit approval** (see blockers). Never do it unilaterally. One cross-repo GitHub Project ("Boardroom") should eventually show objectives, defects, migrations and completion evidence in one place.
 
 ## I.6 The Master Architecture Registry (a Phase 0 deliverable)
