@@ -36,7 +36,7 @@ Sign-in uses the **Google sign-in already live on `lifeos.libbyhd.org`** (Google
 |---|---|---|---|
 | 1 | In Google Cloud → project **LifeOS** → APIs & Services → Credentials → **Life OS web** → Authorized JavaScript origins, add `https://familyos.libbyhd.org`, `https://callum.libbyhd.org`, `https://finnley.libbyhd.org` | Matthew | console.cloud.google.com |
 | 2 | (For Kellsie) add her Google address as a **test user** on the LifeOS OAuth consent screen, and to `ALLOWED_EMAILS` in `wrangler.jsonc` | Matthew / Claude | Same project → OAuth consent screen |
-| 3 | Merge PR #2, then PR #3, into `main`. Workers Builds then deploys automatically. **This replaces the unused chat template currently deployed as the `vault` Worker.** | Matthew | GitHub |
+| 3 | Merge PR #2, then PR #3, into `main` (`github.com/LibbyHD/vault/pulls`). Workers Builds then deploys automatically. **This replaces the unused chat template currently deployed as the `vault` Worker.** | Matthew | GitHub |
 | 4 | Verify from cellular: all three sites show Google sign-in, then empty setup; a non-approved Google account is refused | Claude, with Matthew's phone | |
 
 Known risk at step 3: the Workers Builds token may lack permission to create the three custom domains. If the build log says so, add them by hand: Cloudflare → Workers & Pages → vault → Settings → Domains & Routes → Add → Custom domain (one per address).
@@ -46,4 +46,4 @@ Known risk at step 3: the Workers Builds token may lack permission to create the
 |---|---|---|
 | B4 | Calendar, Gmail and Drive connectors | Uses the same LifeOS Google project. Later phase |
 | B5 | Any AI on health data | Approve a data-handling note |
-| B6 | Move repo to `LibbyHD/familyOS` | Create the org, transfer, then re-grant the Cloudflare GitHub app access |
+| B6 | Repo name `LibbyHD/familyOS` | Account rename to `LibbyHD` is **done** (2026-11-02). Remaining: rename the repo `vault` → `familyOS` in Settings → General, then confirm Cloudflare → vault → Settings → Build still shows it connected |
