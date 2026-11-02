@@ -3,7 +3,7 @@
  * Cloudflare Access (layer 1) is configured in the dashboard; this code never
  * trusts that it is present. Fails closed when not configured.
  */
-import type { Env } from "./types";
+import type { Env } from "../types";
 
 export interface Jwk extends JsonWebKey {
 	kid?: string;

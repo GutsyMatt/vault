@@ -1,8 +1,9 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { computeAges, detectRedFlags, parseRapidLog, torontoLocalToUtcIso } from "../src/lib";
-import { verifyAccessJwt } from "../src/auth";
-import type { PersonVault } from "../src/vault";
+import { torontoLocalToUtcIso } from "../src/core/util";
+import { computeAges, detectRedFlags, parseRapidLog } from "../src/medical/clinical";
+import { verifyAccessJwt } from "../src/core/auth";
+import type { PersonVault } from "../src/storage/person-vault";
 
 const C = "http://callum.localhost";
 const F = "http://finnley.localhost";
@@ -57,7 +58,7 @@ describe("10. authentication fails closed", () => {
 	it("health check is public and contains no PHI", async () => {
 		const r = await SELF.fetch("https://callum.libbyhd.org/healthz");
 		expect(r.status).toBe(200);
-		expect(await r.json()).toEqual({ ok: true, version: "0.1.0" });
+		expect(await r.json()).toEqual({ ok: true, version: "0.2.0" });
 	});
 
 	it("security headers are set", async () => {
@@ -68,9 +69,9 @@ describe("10. authentication fails closed", () => {
 		await r.arrayBuffer();
 	});
 
-	it("dev seed route is not reachable on production hosts", async () => {
-		const r = await SELF.fetch("https://callum.libbyhd.org/api/dev/seed", j({}));
-		expect(r.status).not.toBe(201);
+	it("there is no demo-data route anywhere", async () => {
+		const r = await SELF.fetch(`${C}/api/dev/seed`, j({}));
+		expect(r.status).toBe(404);
 		await r.arrayBuffer();
 	});
 });
@@ -253,5 +254,32 @@ describe("export", () => {
 		expect(e.format).toBe("familyos-person-export/v1");
 		expect(JSON.stringify(e)).toContain("OnlyCallum");
 		expect(JSON.stringify(e)).not.toContain("OnlyFinnley");
+	});
+});
+
+describe("household (parent) view: familyos host", () => {
+	const H = "http://familyos.localhost";
+	it("shows each child's compact card, in left-to-right order, labelled per child", async () => {
+		await setup(C, "HH-Callum");
+		await setup(F, "HH-Finnley");
+		await SELF.fetch(`${F}/api/issues`, j({ title: "Overdue thing", due_date: "2020-01-01" }));
+		const h = (await (await SELF.fetch(`${H}/api/household`)).json()) as any;
+		expect(h.members.map((m: any) => m.person)).toEqual(["callum", "finnley"]);
+		expect(h.members[0].card.profile.display_name).toBe("HH-Callum");
+		expect(h.members[1].card.profile.display_name).toBe("HH-Finnley");
+		expect(h.members[1].card.overdue.map((o: any) => o.title)).toContain("Overdue thing");
+		expect(JSON.stringify(h.members[0].card)).not.toContain("Overdue thing");
+	});
+	it("cannot write or reach per-record routes", async () => {
+		for (const [m, p] of [["POST", "/api/log"], ["GET", "/api/summary"], ["GET", "/api/export"], ["POST", "/api/household"]] as const) {
+			const r = await SELF.fetch(`${H}${p}`, { method: m, headers: { "content-type": "application/json" }, body: m === "POST" ? "{}" : undefined });
+			expect(r.status, `${m} ${p}`).toBe(404);
+			await r.arrayBuffer();
+		}
+	});
+	it("is locked on the production host without sign-in", async () => {
+		const r = await SELF.fetch("https://familyos.libbyhd.org/api/household");
+		expect(r.status).toBe(503);
+		await r.arrayBuffer();
 	});
 });

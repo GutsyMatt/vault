@@ -12,6 +12,13 @@ export default defineWorkersConfig({
 				miniflare: {
 					bindings: {
 						DEV_AUTH_EMAIL: "parent@example.test",
+						HOUSEHOLD: JSON.stringify({
+							hosts: ["familyos.localhost", "familyos.libbyhd.org"],
+							members: [
+								{ person: "callum", host: "callum.localhost" },
+								{ person: "finnley", host: "finnley.localhost" },
+							],
+						}),
 						HOST_PERSON_MAP: JSON.stringify({
 							"callum.localhost": "callum",
 							"finnley.localhost": "finnley",

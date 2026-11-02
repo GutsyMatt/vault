@@ -1,5 +1,5 @@
 /**
- * FamilyOS Worker: CallumOS + FinnleyOS.
+ * FamilyOS Worker (LibbyHD → FamilyOS): familyos. (household), callum., finnley.
  * Not public: workers.dev and preview URLs are disabled, so the custom domains
  * (behind Cloudflare Access) are the only way in. See docs/STATUS.md.
  */
@@ -12,6 +12,7 @@
 	"workers_dev": false,
 	"preview_urls": false,
 	"routes": [
+		{ "pattern": "familyos.libbyhd.org", "custom_domain": true },
 		{ "pattern": "callum.libbyhd.org", "custom_domain": true },
 		{ "pattern": "finnley.libbyhd.org", "custom_domain": true }
 	],
@@ -27,7 +28,8 @@
 	"triggers": { "crons": ["*/30 * * * *"] },
 	"vars": {
 		"HOST_PERSON_MAP": "{\"callum.libbyhd.org\":\"callum\",\"finnley.libbyhd.org\":\"finnley\"}",
-		"APP_VERSION": "0.1.0"
+		"HOUSEHOLD": "{\"hosts\":[\"familyos.libbyhd.org\"],\"members\":[{\"person\":\"callum\",\"host\":\"callum.libbyhd.org\"},{\"person\":\"finnley\",\"host\":\"finnley.libbyhd.org\"}]}",
+		"APP_VERSION": "0.2.0"
 		// ACCESS_TEAM_DOMAIN, ACCESS_AUD and ALLOWED_EMAILS are set as secrets/vars at deploy time.
 		// Until they are set, every request is refused (fail closed).
 	},

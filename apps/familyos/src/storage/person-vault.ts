@@ -8,6 +8,7 @@
  * resolutions are new rows.
  */
 import { DurableObject } from "cloudflare:workers";
+import { formatToronto, sha256Hex, sniffMime, torontoLocalToUtcIso, ulid } from "../core/util";
 import {
 	EVIDENCE_REQUIRED,
 	ISSUE_STATUSES,
@@ -15,15 +16,10 @@ import {
 	VERIFICATION,
 	computeAges,
 	detectRedFlags,
-	formatToronto,
 	parseRapidLog,
-	sha256Hex,
-	sniffMime,
-	torontoLocalToUtcIso,
-	ulid,
 	type IssueStatus,
-} from "./lib";
-import type { Env } from "./types";
+} from "../medical/clinical";
+import type { Env } from "../types";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL);
@@ -134,6 +130,7 @@ export class PersonVault extends DurableObject<Env> {
 		try {
 			return await this.route(request, url, actor);
 		} catch (e) {
+			if (!request.bodyUsed) await request.body?.cancel().catch(() => {});
 			if (e instanceof HttpError) return json({ error: e.message }, e.status);
 			console.error("vault error", (e as Error).name); // no PHI in logs
 			return json({ error: "Internal error" }, 500);
@@ -157,6 +154,7 @@ export class PersonVault extends DurableObject<Env> {
 			m === method && p.length === segs.length && segs.every((s, i) => s === "*" || s === p[i]);
 
 		if (is("GET", "summary")) return json(this.summary());
+		if (is("GET", "card")) return json(this.card());
 		if (is("PUT", "profile")) return json(this.putProfile(await this.body(request), actor), 201);
 		if (is("POST", "log")) return json(this.addLog(await this.body(request), actor), 201);
 		if (is("GET", "observations")) return json(this.rows("SELECT * FROM observations ORDER BY at DESC LIMIT 200"));
@@ -172,7 +170,6 @@ export class PersonVault extends DurableObject<Env> {
 		if (is("POST", "sources", "*", "report")) return json(this.reportSource(p[1], await this.body(request)), 201);
 		if (is("POST", "tick")) return json(this.tick(Date.now()));
 		if (is("GET", "export")) return json(this.exportAll());
-		if (is("POST", "dev", "seed")) return json(await this.seed(await this.body(request), actor), 201);
 		throw new HttpError(404, "Not found");
 	}
 
@@ -195,7 +192,6 @@ export class PersonVault extends DurableObject<Env> {
 			ga_days: gaD,
 			label: str(b.label, "label", { max: 40 }), // presentation preference e.g. "Baby A · LEFT"
 			side: b.side === "left" || b.side === "right" ? b.side : null,
-			demo: b.demo === true,
 		};
 		const id = ulid();
 		this.sql.exec("INSERT INTO profile_versions (id, at, actor, data) VALUES (?, ?, ?, ?)", id, new Date().toISOString(), actor, JSON.stringify(data));
@@ -204,12 +200,12 @@ export class PersonVault extends DurableObject<Env> {
 	}
 
 	// ---------------- rapid log ----------------
-	private addLog(b: Row, actor: string, atIso?: string) {
+	private addLog(b: Row, actor: string) {
 		const text = str(b.text, "text", { required: true, max: 1000 })!;
 		const parsed = parseRapidLog(text);
 		const redFlags = detectRedFlags(text);
 		const id = ulid();
-		const at = atIso ?? new Date().toISOString();
+		const at = new Date().toISOString();
 		this.sql.exec(
 			"INSERT INTO observations (id, at, actor, text, category, duration_min, volume_ml, tags, red_flags, verification) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PARENT_REPORT')",
 			id,
@@ -694,6 +690,24 @@ export class PersonVault extends DurableObject<Env> {
 			red_flag_guidance: RED_FLAG_GUIDANCE,
 		};
 	}
+	/** Compact, attention-first view for the parent (household) dashboard. */
+	private card() {
+		const s = this.summary() as any;
+		return {
+			profile: s.profile ? { display_name: s.profile.display_name, label: s.profile.label, side: s.profile.side } : null,
+			ages: s.ages,
+			next_appointment: s.next_appointment ? { id: s.next_appointment.id, title: s.next_appointment.title, when: s.next_appointment.when, details_verified: !!s.next_appointment.details_verified } : null,
+			open_issues: s.issues.length,
+			overdue: s.issues.filter((i: Row) => i.overdue).map((i: Row) => ({ title: i.title, next_action: i.next_action, due_date: i.due_date })),
+			conflicts: s.conflicts.map((c: Row) => c.subject),
+			meds_needing_check: s.medications.filter((m: Row) => m.status === "unverified" || m.in_conflict).length,
+			patterns: s.patterns,
+			urgent_last_24h: s.observations.filter((o: Row) => o.red_flags.length && Date.parse(o.at) > Date.now() - 86400000).length,
+			sources_not_connected: s.sources.filter((x: Row) => x.status !== "CONNECTED").map((x: Row) => ({ name: x.name, status: x.status })),
+			last_log: s.observations[0] ? { when: s.observations[0].when, category: s.observations[0].category } : null,
+		};
+	}
+
 	private exportAll() {
 		const tables = ["events", "profile_versions", "observations", "appointments", "briefs", "issues", "issue_status_events", "medications", "med_status_events", "conflicts", "conflict_resolutions", "documents", "doc_receipts", "sources", "source_status_events", "automation_runs"];
 		const out: Record<string, Row[]> = {};
@@ -701,18 +715,4 @@ export class PersonVault extends DurableObject<Env> {
 		return { exported_at: new Date().toISOString(), format: "familyos-person-export/v1", note: "Document bytes are downloadable individually via /api/documents/:id/raw", tables: out };
 	}
 
-	// ---------------- dev seed (synthetic only) ----------------
-	private async seed(b: Row, actor: string) {
-		if (this.profile()) return { seeded: false, reason: "already has data" };
-		const f = b as any;
-		this.putProfile({ ...f.profile, demo: true }, actor);
-		for (const m of f.medications ?? []) this.addMedication(m, actor);
-		for (const i of f.issues ?? []) this.addIssue(i, actor);
-		const now = Date.now();
-		for (const [idx, l] of (f.logs ?? []).entries()) this.addLog({ text: l }, actor, new Date(now - (idx + 1) * 5 * 3600000).toISOString());
-		for (const a of f.appointments ?? []) this.addAppointment(a, actor);
-		const cal = this.one("SELECT id FROM sources WHERE kind = 'calendar'");
-		if (cal && f.calendar_failing) this.reportSource(cal.id, { ok: false, detail: "Calendar access was revoked (demo)" });
-		return { seeded: true };
-	}
 }

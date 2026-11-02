@@ -61,6 +61,15 @@ function sheetError(msg) {
 }
 
 async function load() {
+	if (!load.mode) {
+		try {
+			load.mode = (await api("/whoami")).mode;
+		} catch (e) {
+			$("#fresh").textContent = `Could not load: ${e.message}`;
+			return;
+		}
+	}
+	if (load.mode === "household") return loadHousehold();
 	try {
 		state = await api("/summary");
 	} catch (e) {
@@ -70,6 +79,7 @@ async function load() {
 	renderHeader();
 	if (!state.profile) return renderSetup();
 	$("#setup").hidden = true;
+	document.querySelector(".tabs").hidden = false;
 	render();
 }
 
@@ -87,14 +97,13 @@ function renderHeader() {
 	$("#ages").textContent = a ? `Age ${a.chronological}${a.corrected ? ` · Corrected ${a.corrected}` : ""}` : "";
 	const t = new Date(state.generated_at);
 	$("#fresh").textContent = `Updated ${t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. ${state.sources.filter((s) => s.status !== "CONNECTED").length} source(s) not connected (see Sources).`;
-	$("#demo").hidden = !p?.demo;
 }
 
 function renderSetup() {
 	const el = $("#setup");
 	el.hidden = false;
+	document.querySelector(".tabs").hidden = true;
 	document.querySelectorAll("[data-panel]").forEach((p) => (p.hidden = true));
-	const local = location.hostname.endsWith("localhost");
 	el.innerHTML = `
 	<div class="card">
 		<h2>Set up this record</h2>
@@ -111,7 +120,6 @@ function renderSetup() {
 			<select id="pf-side" name="side"><option value="">None</option><option value="left">Left</option><option value="right">Right</option></select>
 			<p><button type="submit">Save</button></p>
 		</form>
-		${local ? `<p><button class="ghost" id="seed">Load demo data (local testing only)</button></p>` : ""}
 	</div>`;
 	$("#profile-form").addEventListener("submit", async (e) => {
 		e.preventDefault();
@@ -122,10 +130,6 @@ function renderSetup() {
 		} catch (err) {
 			toast(err.message);
 		}
-	});
-	$("#seed")?.addEventListener("click", async () => {
-		await post("/dev/seed", {});
-		load();
 	});
 }
 
@@ -388,5 +392,49 @@ function renderSources() {
 	</div>
 	<div class="card"><h2>Your data</h2><p><a class="btn ghost" href="/api/export" download="familyos-export.json">Download a full export (JSON)</a></p></div>`;
 }
+
+// ---------- Household (parent) view: familyos.libbyhd.org ----------
+async function loadHousehold() {
+	document.querySelector(".tabs").hidden = true;
+	document.querySelectorAll("[data-panel]").forEach((p) => (p.hidden = true));
+	$("#child-name").textContent = "FamilyOS";
+	document.title = "FamilyOS";
+	const el = $("#household");
+	el.hidden = false;
+	let h;
+	try {
+		h = await api("/household");
+	} catch (e) {
+		$("#fresh").textContent = `Could not load: ${e.message}. Nothing shown is current.`;
+		return;
+	}
+	$("#ages").textContent = "Both boys at a glance. Tap a name to open his record.";
+	$("#fresh").textContent = `Updated ${new Date(h.generated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`;
+	const proto = location.protocol;
+	el.innerHTML = `<div class="hh">${h.members
+		.map((m) => {
+			const c = m.card;
+			const href = `${proto}//${m.host}/`;
+			if (!m.ok) return `<div class="card attn"><h2>${esc(m.person[0].toUpperCase() + m.person.slice(1))}</h2><p>Could not load this record right now. This is <strong>not</strong> the same as "nothing to do".</p><a class="btn ghost" href="${esc(href)}">Open</a></div>`;
+			if (!c.profile) return `<div class="card"><h2>${esc(m.person[0].toUpperCase() + m.person.slice(1))}</h2><p class="muted">Not set up yet.</p><a class="btn" href="${esc(href)}">Set up</a></div>`;
+			const attn = [
+				...(c.urgent_last_24h ? [`<li><span class="badge v-CONFLICT">Urgent phrase logged</span> in the last 24 hours</li>`] : []),
+				...c.conflicts.map((x) => `<li><span class="badge v-CONFLICT">Conflict</span> ${esc(x)}</li>`),
+				...c.overdue.map((o) => `<li><span class="badge overdue">Overdue</span> ${esc(o.title)}${o.next_action ? ` → ${esc(o.next_action)}` : ""}</li>`),
+				...c.patterns.map((p) => `<li>${vbadge("AI_INFERENCE")} ${esc(p)}</li>`),
+			];
+			return `<div class="card member" data-side="${esc(c.profile.side || "")}">
+				<div class="row between"><h2><a href="${esc(href)}">${esc(c.profile.display_name)}</a></h2>${c.profile.label ? `<span class="badge side" data-side="${esc(c.profile.side || "")}">${esc(c.profile.label)}</span>` : ""}</div>
+				${c.ages ? `<p class="small muted">Age ${esc(c.ages.chronological)}${c.ages.corrected ? ` · corrected ${esc(c.ages.corrected)}` : ""}</p>` : ""}
+				<p><strong>Next:</strong> ${c.next_appointment ? `${esc(c.next_appointment.title)}, ${esc(c.next_appointment.when)}${c.next_appointment.details_verified ? "" : " (not verified)"}` : `none recorded <span class="small muted">(check Sources)</span>`}</p>
+				<p class="small">${c.open_issues} open issue(s) · ${c.meds_needing_check} medication(s) need checking${c.last_log ? ` · last log ${esc(c.last_log.when)}` : ""}</p>
+				${attn.length ? `<ul class="list">${attn.join("")}</ul>` : `<p class="small muted">Nothing flagged.</p>`}
+				${c.sources_not_connected.length ? `<p class="small"><span class="badge s-NOT-CONNECTED">${c.sources_not_connected.length} source(s) not connected</span></p>` : ""}
+				<a class="btn" href="${esc(href)}">Open ${esc(c.profile.display_name)}'s record</a>
+			</div>`;
+		})
+		.join("")}</div>`;
+}
+
 
 load();
