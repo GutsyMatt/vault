@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS conflicts (id TEXT PRIMARY KEY, created_at TEXT NOT N
 CREATE TABLE IF NOT EXISTS conflict_resolutions (id TEXT PRIMARY KEY, conflict_id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, chosen_id TEXT NOT NULL, evidence TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, filename TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, received_at TEXT NOT NULL, actor TEXT NOT NULL, verification TEXT NOT NULL, note TEXT);
 CREATE TABLE IF NOT EXISTS doc_chunks (doc_id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (doc_id, idx));
+CREATE TABLE IF NOT EXISTS drive_imports (source_id TEXT PRIMARY KEY, source_hash TEXT NOT NULL, document_id TEXT NOT NULL, imported_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS doc_receipts (id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, filename TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, expected_interval_min INTEGER, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS source_status_events (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, at TEXT NOT NULL, ok INTEGER NOT NULL, detail TEXT);
@@ -175,6 +176,13 @@ export class PersonVault extends DurableObject<Env> {
 		if (is("GET", "issues", "*")) return json(this.issueDetail(p[1]));
 		if (is("POST", "medications")) return json(this.addMedication(await this.body(request), actor), 201);
 		if (is("POST", "conflicts", "*", "resolve")) return json(this.resolveConflict(p[1], await this.body(request), actor), 201);
+		if (is("GET", "drive-imports", "*")) return json(this.one("SELECT source_hash, document_id FROM drive_imports WHERE source_id = ?", p[1]) ?? {source_hash:null});
+		if (is("POST", "drive-imports", "*")) {
+			const b = await this.body(request);
+			if (!this.one("SELECT id FROM documents WHERE id = ? AND sha256 = ?", b.document_id, b.source_hash)) throw new HttpError(400, "Source document not verified");
+			this.sql.exec("INSERT INTO drive_imports (source_id,source_hash,document_id,imported_at) VALUES (?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET source_hash=excluded.source_hash,document_id=excluded.document_id,imported_at=excluded.imported_at",p[1],b.source_hash,b.document_id,new Date().toISOString());
+			return json({recorded:true});
+		}
 		if (is("POST", "documents")) return json(await this.addDocument(request, url, actor), 201);
 		if (is("GET", "documents", "*", "raw")) return this.rawDocument(p[1]);
 		if (is("POST", "sources", "*", "report")) return json(this.reportSource(p[1], await this.body(request)), 201);
