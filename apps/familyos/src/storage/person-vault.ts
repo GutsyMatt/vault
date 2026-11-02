@@ -588,17 +588,21 @@ export class PersonVault extends DurableObject<Env> {
 		this.event(actor, duplicate ? "document.duplicate_received" : "document.stored", { id: docId, sha256: hash });
 		return { id: docId, sha256: hash, duplicate, mime, size: buf.length };
 	}
-	private rawDocument(docId: string): Response {
+	private async rawDocument(docId: string): Promise<Response> {
 		const d = this.one("SELECT * FROM documents WHERE id = ?", docId);
 		if (!d) throw new HttpError(404, "Not found");
 		const chunks = this.rows("SELECT data FROM doc_chunks WHERE doc_id = ? ORDER BY idx", docId);
+		if (!Number.isSafeInteger(d.size) || d.size < 0) throw new HttpError(500, "Stored document metadata is invalid");
 		const out = new Uint8Array(d.size);
 		let off = 0;
 		for (const c of chunks) {
 			const u = new Uint8Array(c.data as ArrayBuffer);
+			if (off + u.length > out.length) throw new HttpError(500, "Stored document exceeds declared size");
 			out.set(u, off);
 			off += u.length;
 		}
+		if (off !== out.length || (await sha256Hex(out)) !== d.sha256)
+			throw new HttpError(500, "Stored document failed integrity verification");
 		return new Response(out, {
 			headers: {
 				"content-type": d.mime,
