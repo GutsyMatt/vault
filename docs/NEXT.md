@@ -14,6 +14,11 @@ Read `CLAUDE.md`, then this file, then `docs/STATUS.md`. Don't ask Matthew to re
 - Keep messages short and plain. He gets confused by settings pages: give one direct link and the exact taps.
 - No demo data, ever.
 
+## Done 2026-11-02 (with the automation key)
+- Past events loaded from the two HHS MyChart summaries (Oct 30): 6 for Callum, 7 for Finnley. All `EXTRACTED`, each with its source doc link. There's an idempotency guard (same date and title are skipped).
+- Finnley's medications: propranolol 1 mg/mL (family report) vs 5 mg/mL (MyChart), so the CONFLICT is live; ferrous sulfate. Callum has no medications on record.
+- Scripts call the API with a `user-agent` header, because Cloudflare blocks the default Python UA (403).
+
 ## Do next, in order
 1. **Approved by Matthew 2026-11-02 ("Yes use drive records")**, which is the AI data-handling approval from the directive. add past life events for each boy from Drive (search "Callum", "Finnley", "NICU", "MyChart", "discharge", "cardiology", "Holter") using the automation key. Mark them `EXTRACTED` and include the source doc link in the note. Never mix the twins. Add the propranolol record pair (1 mg/mL vs 5 mg/mL) as two medication records, so the app flags the conflict.
 2. **Google Calendar API:** Matthew was asked to enable it (https://console.cloud.google.com/apis/library/calendar-json.googleapis.com?project=406206707598). Then build the background Google connection (one "Connect Google" tap; it needs offline OAuth and a client secret stored server-side). Use it for appointment detection from calendars and Gmail.
@@ -23,3 +28,10 @@ Read `CLAUDE.md`, then this file, then `docs/STATUS.md`. Don't ask Matthew to re
 ## How to work
 - Tests: `cd apps/familyos && npm run check` (typecheck, 41 tests, deploy dry-run).
 - Ship: branch → PR → merge into `main` → wait for `https://callum.libbyhd.org/healthz` to show the new `APP_VERSION` → verify live.
+
+## Drive sources not yet loaded
+- `2026-09-02_finnley_cardiology-svt-dr-netto…` (`1dbGhWtE2lZ2_ZyjAiaE_qpLeZK5fNyWFYtQFtUwOFw0`): visit transcript, for cardiology questions and issues.
+- `2026-08-19_finnley_vaccination-health-review…` (two copies: `1LMbsQ9l…`, `18njdKC1…`). Deduplicate first.
+- `FamilyOS — Callum/Finnley — Longitudinal Patient File and Record Gaps` (`1O20VsCj…`, `1StK-mxk…`): turn record gaps into issues (records requests to CMH and HHS).
+- `GP Vaccine Visit Brief and Open Referral Register` (`1pbZtBhP…`): add the Nov 2 vaccination appointment and the open referrals as issues.
+- Cambridge Memorial (CMH) records: none in Drive yet. That's a records request to track as an issue.
