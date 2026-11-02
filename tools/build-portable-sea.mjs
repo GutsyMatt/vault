@@ -9,6 +9,7 @@ execFileSync(process.execPath,['--experimental-sea-config','dist/portable/sea-co
 copyFileSync(process.execPath,exe);
 if(process.platform==='darwin'){try{execFileSync('codesign',['--remove-signature',exe],{stdio:'inherit'})}catch{}}
 const inject=['node_modules/postject/dist/cli.js',exe,'NODE_SEA_BLOB','dist/portable/sea.blob','--sentinel-fuse','NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'];
+if(process.platform==='darwin')inject.push('--macho-segment-name','NODE_SEA');
 if(!existsSync(inject[0]))throw Error('postject not installed');
 execFileSync(process.execPath,inject,{stdio:'inherit'});
 if(process.platform==='darwin')execFileSync('codesign',['--sign','-','--force',exe],{stdio:'inherit'});
