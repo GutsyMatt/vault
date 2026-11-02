@@ -1,0 +1,23 @@
+name: Offline export integrity - cross-platform tests
+on:
+  pull_request:
+    paths:
+      - 'tools/verify-offline-export*.mjs'
+      - '.github/workflows/offline-export-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test tools/verify-offline-export.test.mjs
