@@ -1,7 +1,7 @@
 # NATICO Platform: one-shot build prompt for Claude
 ## First slice to make work: FamilyOS → CallumOS + FinnleyOS
 
-> **How to use this file.** Paste everything below the line into a new Claude Code session that has the `gutsymatt/vault` repo attached (or say: *"Read `docs/ONE_SHOT_PROMPT.md` and execute it."*). It is meant to be self-contained. The original directive in Google Drive (`FAMILYOS — Claude One-Shot Build Directive`, doc id `1aqD9XwV4YEeLoebGJxuq2LVX9wf1r0TiQmHDGTgYJbc`) is still authoritative for anything this file leaves unclear. Where the two conflict, this file wins, because it reflects the infrastructure that actually exists.
+> **How to use this file.** Paste everything below the line into a new Claude Code session that has the `LibbyHD/vault` repo attached (renamed from `GutsyMatt/vault`; to become `LibbyHD/familyOS`) (or say: *"Read `docs/ONE_SHOT_PROMPT.md` and execute it."*). It is meant to be self-contained. The original directive in Google Drive (`FAMILYOS — Claude One-Shot Build Directive`, doc id `1aqD9XwV4YEeLoebGJxuq2LVX9wf1r0TiQmHDGTgYJbc`) is still authoritative for anything this file leaves unclear. Where the two conflict, this file wins, because it reflects the infrastructure that actually exists.
 >
 > **Structure.** **Part I** is the whole platform: the long-term destination every design decision must fit. **Part II** is the first slice you build and prove: CallumOS and FinnleyOS. Read both. Build Part II, shaped so it becomes part of Part I without being rewritten.
 
@@ -70,13 +70,13 @@ LIBBYHD_PRIVATE/
 
 The long-term logical domains are: 01 platform-governance · 02 libby-intelligence · 03 sentinel-evidence · 04 lifeos · 05 familyos · 06 natico-advocacy · 07 experience-and-apps · 08 integrations-and-ingestion · 09 automation-and-agents · 10 infrastructure-and-devices · 11 knowledge-and-research · 12 quality-security-and-operations.
 
-These are **logical groupings, implemented as modules or packages first.** Split them into repositories only at real deployment, permission, ownership or release boundaries. Proposed starting set of canonical repos, under a single GitHub org (provisionally `natico-platform`):
+These are **logical groupings, implemented as modules or packages first.** Split them into repositories only at real deployment, permission, ownership or release boundaries. **Decided by the parents (2026-11-02): LibbyHD is the parent; FamilyOS sits under it.** GitHub: organization **`LibbyHD`**, with this product as the repo **`LibbyHD/familyOS`**. Web: **`familyos.libbyhd.org`** is the parent (household) site, with **`callum.libbyhd.org`** and **`finnley.libbyhd.org`** as the children's sites. Other repos below become siblings under `LibbyHD` only when there is real code for them. Starting set:
 
 | Repo | Holds |
 |---|---|
 | `platform-governance` | Constitution and principles, system map, ADRs and decision register, canonical-source authority, identity and permission model, **Master Architecture Registry**, migration inventory |
 | `libby-platform` | Shared schemas, Libby intelligence, SENTINEL libraries, connectors, agents (as packages) |
-| `familyos-app` | Family dashboard, LifeOS views, the per-person portals (CallumOS/FinnleyOS), caregiver UX, action queues |
+| `familyOS` (= `LibbyHD/familyOS`; the old working name was `familyos-app`) | Family dashboard, LifeOS views, the per-person portals (CallumOS/FinnleyOS), caregiver UX, action queues |
 | `platform-infrastructure` | Deployment and IaC, Cloudflare, local core (Toshiba/Tailscale/Home Assistant/Ollama), monitoring, backup, security |
 | `natico-public` | Public site and reusable public-safe advocacy resources, independently governed |
 
@@ -93,13 +93,26 @@ These are **logical groupings, implemented as modules or packages first.** Split
 
 If any of these repos already exist on GitHub, add them to the registry (§I.6) as assets to audit. Don't treat them as a competing plan.
 
-**Right now:** you only have `gutsymatt/vault`. Phase 0 classified it: it is a Cloudflare Workers template already wired to Workers Builds. It becomes the **seed of `familyos-app`**, with a `packages/`-style layout so the shared schema and core can later move to `libby-platform` without a rewrite. Creating the org or new repos, or moving or renaming existing repos, is a **migration action that needs explicit approval** (see blockers). Never do it unilaterally. One cross-repo GitHub Project ("Boardroom") should eventually show objectives, defects, migrations and completion evidence in one place.
+**In-repo module layout (the deep structure, as real modules, never empty folders).** Inside `LibbyHD/familyOS`, code is organised the way the earlier `familyos-*` proposal grouped it. Add a folder only when it gets working, tested code:
+
+```
+apps/familyos/src/
+  core/        identity & auth, ids, time, provenance helpers   (was: familyos-core)
+  medical/     clinical rules: ages, logging, red flags, issue lifecycle (was: familyos-medical)
+  storage/     per-person vault (Durable Object), append-only tables
+  connectors/  Google Calendar / Gmail / Drive                 (when built: was familyos-connectors)
+  advocacy/    disability, benefits and evidence workflows      (later: was familyos-advocacy)
+apps/familyos/public/   household view, Callum and Finnley portals (was: familyos-web)
+apps/familyos/wrangler.jsonc + docs/   deployment, monitoring and backup (was: familyos-infrastructure)
+```
+
+**Right now:** the repo is `LibbyHD/vault`. The GitHub account `GutsyMatt` was renamed to `LibbyHD` on 2026-11-02, so `LibbyHD` is a personal account, not an organization, and old URLs redirect. Phase 0 classified it: it is a Cloudflare Workers template already wired to Workers Builds. It becomes the **seed of `familyos-app`**, with a `packages/`-style layout so the shared schema and core can later move to `libby-platform` without a rewrite. Creating the org or new repos, or moving or renaming existing repos, is a **migration action that needs explicit approval** (see blockers). Never do it unilaterally. One cross-repo GitHub Project ("Boardroom") should eventually show objectives, defects, migrations and completion evidence in one place.
 
 ## I.6 The Master Architecture Registry (a Phase 0 deliverable)
 
 A version-controlled, machine-readable registry (`registry/*.yaml`, with a JSON schema and a validation test), plus a generated status page. Entry types: repository, local workspace, Drive root, hostname/domain, deployed service, database, agent, scheduled job, integration, archive/bundle. Fields: `id`, `name`, `type`, `location`, `capability` (NATICO/Libby/SENTINEL/LifeOS/FamilyOS/foundation), `canonical_destination`, `authority`, `verified_state` (`operational` / `partial` / `experimental` / `obsolete` / `broken` / `unknown` / `security-sensitive`), `evidence` (how and when verified), `dependencies`, `duplicates_of`, `conflicts`, `migration_priority`, `owner`, `notes`.
 
-Seed it with every asset the family has mentioned, **all `unknown` until checked**: `natico-org`, `libby-live`/`libby_live`, `libby_demo`, `libby-live-references`, `sentinel-framework`, `natico-case-vault`, `LibbytheLibrarian/LibbyHD`, `ios_extraction`, `voice-memo-transcription`, local FAMILYOS work, `FamilyOS-FinnleyOS.git.bundle` (preserve as a recovery artifact; inspect before merging anything), Obsidian graph and exporters, `00_FAMILYOS_LIVE`, LibbyOS Boardroom, governance freeze v4.2.1, `libbyhd.org`, `libby.natico.ca`, the Toshiba local core, the ChatGPT appointment watch, the Ops Control Board, and `gutsymatt/vault`. Recover and reconcile the earlier **482-file migration map**, unresolved-item reports and prior repo audits if they can be found (Drive search). Do not regenerate them from memory.
+Seed it with every asset the family has mentioned, **all `unknown` until checked**: `natico-org`, `libby-live`/`libby_live`, `libby_demo`, `libby-live-references`, `sentinel-framework`, `natico-case-vault`, `LibbytheLibrarian/LibbyHD`, `ios_extraction`, `voice-memo-transcription`, local FAMILYOS work, `FamilyOS-FinnleyOS.git.bundle` (preserve as a recovery artifact; inspect before merging anything), Obsidian graph and exporters, `00_FAMILYOS_LIVE`, LibbyOS Boardroom, governance freeze v4.2.1, `libbyhd.org`, `libby.natico.ca`, the Toshiba local core, the ChatGPT appointment watch, the Ops Control Board, and `LibbyHD/vault` (formerly `GutsyMatt/vault`). Recover and reconcile the earlier **482-file migration map**, unresolved-item reports and prior repo audits if they can be found (Drive search). Do not regenerate them from memory.
 
 ## I.7 How the capabilities work together (the target loop)
 
@@ -162,10 +175,10 @@ It must answer the same question for Callum.
 
 | Fact | Evidence | Implication |
 |---|---|---|
-| Repo `gutsymatt/vault` is an unmodified **Cloudflare Workers AI chat template** (`src/index.ts`, `public/`, `wrangler.jsonc` with `AI` + `ASSETS` bindings, Wrangler 4.56, Vitest pool-workers) | Single commit `source repo import` | This is the codebase. Replace the template; keep the Workers toolchain. |
+| Repo `LibbyHD/vault` (formerly `GutsyMatt/vault`) was an unmodified **Cloudflare Workers AI chat template** (`src/index.ts`, `public/`, `wrangler.jsonc` with `AI` + `ASSETS` bindings, Wrangler 4.56, Vitest pool-workers) | Single commit `source repo import` | This is the codebase. Replace the template; keep the Workers toolchain. |
 | `libbyhd.org` resolves to Cloudflare anycast IPs (172.67.x / 104.21.x) and returns HTTP 200 | `getent hosts`, `curl` | The zone is on Cloudflare. Subdomains can be added as Worker custom domains in the same account. |
 | The repo is **already connected to Cloudflare Workers Builds** (Worker `vault`, account subdomain `mattherbert01.workers.dev`). Every push deploys automatically, and the bot posts public **commit and branch preview URLs** on `*.mattherbert01.workers.dev` | Check run "Workers Builds: vault" plus a Cloudflare bot comment on PR #2 | CI/CD to Cloudflare already exists, so reuse it rather than building a parallel pipeline. **Critical:** `workers.dev` and preview URLs are public by default. Before any PHI or real data exists, disable `workers_dev` and preview URLs in `wrangler.jsonc` (or put them behind Cloudflare Access), so the custom domains are the only way in. Add a test that the `workers.dev` hosts return no app data. |
-| `callum.libbyhd.org` and `finnley.libbyhd.org` **do not resolve** | `getent hosts` → no result | Not deployed. Creating them is part of Phase 1. |
+| `familyos.libbyhd.org`, `callum.libbyhd.org` and `finnley.libbyhd.org` **do not resolve**. `libbyhd.org`/`www` serve a **public** landing page with no Access in front. `app.libbyhd.org` returns Cloudflare "DNS points to prohibited IP". No Cloudflare Access login was observed on any reachable `libbyhd.org` host | `getent hosts`, `curl` (2026-11-02) | Parents believe sign-in is already live. It may exist in Zero Trust without covering these hosts: get the team domain and the Access application AUD (or add the three hosts to an existing app) before deploying. Do not assume. |
 | FamilyOS Operations Control Board exists in Google Sheets (`1KKdxaGrTuQSWe41QEi256AJF4OPvE1dEivXTR_FwhG4`) with APPOINTMENTS, WAITING_ON, TASKS (and reportedly INTAKE_QUEUE + provenance tabs) | Previous assistant report, **not yet re-verified** | Read it (read-only) in Phase 0. It is the existing action layer. Import from it; don't build a competing tracker. |
 | Nov 2 GP agenda doc exists (`1pbZtBhP58HXDqPtPqWGo-TMQIR_RAkUWxq_i5WvkOTo`) | Previous assistant report, **not re-verified** | Import as an evidence document. |
 | Drive holds newborn reports, inpatient after-visit summaries, Callum and Finnley health summaries, cardiology consult material, discharge binders, Oct 30 HHS MyChart summaries, a records-request package | Previous assistant report, **not re-verified** | Phase 2 import source. Inventory it; don't assume completeness. |
@@ -196,7 +209,8 @@ Anything marked "not re-verified" is a lead, not a fact. Re-verify it, or label 
 9. **No scraping and no bypassing.** Do not scrape MyChart, ConnectMyHealth or any portal. Do not claim portal integration. HHS MyChart proxy access does not grant API access. Use exports, formal records requests and uploads.
 10. **No external AI on PHI until approved.** Before any PHI goes to an LLM (including Workers AI or the Anthropic API), produce a short data-handling note (what is sent, where it is processed and where it resides, retention, training opt-out). The parents must approve it in writing in the app (an `authorization` record). Until then, intelligence features use deterministic rules plus search over the family's own data.
 11. **Degraded is not empty.** A failed or disconnected source shows as **DEGRADED** with the last successful sync time and raises an alert. It is never shown as "no appointments" or "nothing new".
-12. **Status vocabulary for your reports:** every feature is `VERIFIED OPERATIONAL` / `PARTIAL` / `BLOCKED` / `NOT IMPLEMENTED`. Use nothing else, and no adjectives like "fully" or "seamlessly".
+12. **No demo data, ever.** No invented records, fixtures, seed routes or "load demo data" buttons in the app or any deployed environment. Automated tests may create obviously synthetic values inside test files only; those never ship. Screens are shown with real data or empty states.
+13. **Status vocabulary for your reports:** every feature is `VERIFIED OPERATIONAL` / `PARTIAL` / `BLOCKED` / `NOT IMPLEMENTED`. Use nothing else, and no adjectives like "fully" or "seamlessly".
 
 ---
 
@@ -261,7 +275,7 @@ Feeds (volume, formula and recipe version, fortification, duration, difficulty, 
 
 | Concern | Choice |
 |---|---|
-| Hosting and routing | One Worker (`familyos`) with custom domains `callum.libbyhd.org` and `finnley.libbyhd.org`. The **hostname selects the person context** (via a `presentation_preference`/host-mapping row, not hard-coded). A request's hostname person must equal the person on every resource it touches, or the response is a 404. (Optional: `family.libbyhd.org` for the joint overview; ask before creating it.) |
+| Hosting and routing | One Worker (`familyos`) with custom domains `familyos.libbyhd.org` (household/parent view: each child's summary side by side, read-only, links down) plus `callum.libbyhd.org` and `finnley.libbyhd.org`. The **hostname selects the person context** (via a `presentation_preference`/host-mapping row, not hard-coded). A request's hostname person must equal the person on every resource it touches, or the response is a 404. |
 | Frontend | Installable PWA served from Workers static assets. Use a small framework (Preact/React + Vite, or Hono JSX). It must work at iPhone 15 Pro Max width, with iPad keyboard navigation, and in a 10-foot TV layout. Service worker caches the shell only. **Never cache PHI responses offline** without an explicit, revocable per-device opt-in. |
 | API | Hono on Workers, Zod validation on every input. |
 | Relational and event store | **D1**. Append-only `events` table, plus projection tables for current state. Numbered migrations under `migrations/`. |
@@ -269,8 +283,8 @@ Feeds (volume, formula and recipe version, fortification, duration, difficulty, 
 | Background jobs | **Queues** (ingest, extract, reconcile, notify) with retries and a **dead-letter queue** surfaced in the UI. **Cron Triggers** for scheduled work (see §9). |
 | Search | D1 FTS5 for full text. Semantic retrieval (Vectorize) only after rule 10 approval, and per-patient namespaces only. |
 | AI | Off for PHI until approved. Then, if approved, use the Anthropic API (latest Claude model) or Workers AI per the approved data note. Tool-restricted: the model can only call read functions scoped to the hostname patient. |
-| Auth (layer 1) | **Cloudflare Access** on both hostnames: allow-list of parent emails, passkey/WebAuthn or one-time PIN, plus MFA. |
-| Auth (layer 2) | The app **verifies the Access JWT** (`Cf-Access-Jwt-Assertion`, checked against the team's JWKS and AUD) on every request. It maps the email to a `user` and role, and checks a `person_access` row. Access alone is never trusted. |
+| Auth | **Decided 2026-11-02: Google sign-in**, the method already live on `lifeos.libbyhd.org` (Google Cloud project "LifeOS", client "Life OS web"). The Worker verifies the Google ID token on every request (signature, client id, issuer, expiry, `email_verified`) against an `ALLOWED_EMAILS` allow-list, and holds it in a Secure HttpOnly cookie. A Cloudflare Access JWT is also accepted if Access is added later. Fail closed when neither is configured. |
+| Deploy | **Cloudflare Workers Builds, already connected to this repo** (account `92ca8386…`, Worker `vault`). The root `wrangler.jsonc` is the production config, and merging to `main` deploys. `apps/familyos/wrangler.jsonc` is dev/test only, with no routes. |
 | Secrets | Wrangler secrets only. Nothing in the repo. Add `.dev.vars` to `.gitignore`. |
 | Environments | `dev` (local Miniflare, fixtures only, **no real PHI**), `staging` (synthetic data), `production`. |
 | CI/CD | The existing Cloudflare Workers Builds git integration does the deploys. GitHub Actions run the checks: typecheck, lint, unit tests, Workers integration tests (vitest-pool-workers), secret scan (gitleaks), dependency audit, `wrangler deploy --dry-run`. Deploy to production only from `main` after the checks pass. Keep the previous version for `wrangler rollback`. |
@@ -381,7 +395,7 @@ Use **synthetic fixtures** in CI and public logs. Run the real-data checks only 
 9. **Resilience:** data survives a Worker redeploy and a `wrangler rollback`. A backup restores into staging with matching row counts and hashes.
 10. **Auth:** unauthenticated → Access wall. A forged or missing JWT is rejected by the app. The denial is logged. No PHI is in any unauthenticated response, header or error.
 11. **Devices and accessibility:** axe-core has zero serious violations. iPhone and iPad manual checks are done. TV mode shows no clinical data.
-12. **Live domains:** `https://callum.libbyhd.org` and `https://finnley.libbyhd.org` are reachable externally, TLS is valid, authentication is enforced, real persisted data renders after login, and the uptime/TLS monitor fires a test alert. **Domain reachability alone is not a pass.**
+12. **Live domains:** `https://familyos.libbyhd.org`, `https://callum.libbyhd.org` and `https://finnley.libbyhd.org` are reachable externally, TLS is valid, authentication is enforced, real persisted data renders after login, and the uptime/TLS monitor fires a test alert. **Domain reachability alone is not a pass.**
 13. **The acceptance question** (§0) is answered for both boys with dated citations, verification labels and outstanding actions.
 
 ---
@@ -410,7 +424,7 @@ Blockers you should expect. Ask for them **once, together, as a short checklist*
 3. **Google OAuth consent** for read-only Drive, Calendar and Gmail scopes, or sharing of a designated FamilyOS Drive folder with a service account.
 4. **Approval of the AI data-handling note** (rule 10) before any LLM sees PHI.
 5. Governance freeze v4.2.1 and gates A/B/C text, if it isn't found in Drive.
-6. **GitHub organization decision:** approval to create `natico-platform` (or another name) and to transfer `vault` into it as `familyos-app`. Until approved, keep working in `gutsymatt/vault`.
+6. **GitHub naming (decided: `LibbyHD/familyOS`).** Done: account renamed `GutsyMatt` → `LibbyHD` (2026-11-02). Remaining: rename the repo `vault` → `familyOS` (repo Settings → General → Repository name). GitHub redirects the old URL. Afterwards, confirm Cloudflare Workers Builds still shows the repo as connected (Workers & Pages → vault → Settings → Build).
 7. **Access to the historical repos** (`natico-org`, `libby-live`, `sentinel-framework`, `natico-case-vault`, `LibbytheLibrarian/LibbyHD`, etc.) for read-only registry audit, and a pointer to the D-drive/Toshiba inventory if it isn't in Drive.
 
 ---
