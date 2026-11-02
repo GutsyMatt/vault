@@ -220,7 +220,7 @@ export default {
 			await request.body?.cancel();
 			return withHeaders(Response.json({ error: "Not permitted for automation" }, { status: 403 }), NOSTORE);
 		}
-		if (sub === "/tick" || sub === "/card" || sub.startsWith("/sources/") || sub.startsWith("/drive-imports/")) {
+		if (sub === "/tick" || sub === "/card" || sub.startsWith("/sources/") || sub.startsWith("/drive-imports/") || sub.startsWith("/drive-sync/")) {
 			// Internal / connector-only paths are not exposed to browsers.
 			await request.body?.cancel();
 			return withHeaders(new Response("Not found", { status: 404 }));
