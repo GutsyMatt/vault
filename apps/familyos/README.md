@@ -14,6 +14,7 @@ Build brief: `docs/ONE_SHOT_PROMPT.md`. Status: `docs/STATUS.md`.
 - **Append-only:** status changes, medication verifications and conflict resolutions are new rows. Nothing clinical is updated in place or deleted.
 - **Fail-closed sign-in:** Google sign-in (same Google client as `lifeos.libbyhd.org`), restricted to `ALLOWED_EMAILS`. The Google token is re-verified on every request. A Cloudflare Access JWT is also accepted if Access is ever put in front. With neither configured, every site is locked. `workers.dev` and preview URLs are off.
 - **No demo data.** The app starts empty and asks for each child's basics once.
+- **MyChart exports, not a MyChart connection.** A parent uploads the child's MyChart health summary (CDA XML or MyChart's zip) under Record. `src/medical/ccda.ts` reads its coded entries. The import is refused unless the export names this child by given name and birth date. Entries are `CLINICAL_RECORD`, link to the stored original, and are never edited.
 - **No AI and no external calls with health data.** Briefs and patterns are deterministic rules, labelled "system pattern".
 
 ## Code layout

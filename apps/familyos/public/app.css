@@ -86,7 +86,8 @@ h3 { font-size: 1.05rem; margin: 0 0 6px; }
 .v-CLINICAL_RECORD, .s-verified, .s-CONNECTED, .s-closed { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
 .v-PARENT_REPORT, .v-EXTRACTED, .s-unverified { background: var(--info-bg); color: var(--info); border-color: transparent; }
 .v-CONFLICT, .s-DEGRADED, .overdue { background: var(--danger-bg); color: var(--danger); border-color: transparent; }
-.v-AI_INFERENCE, .s-NOT-CONNECTED { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.s-IMPORTED { background: var(--surface-2); color: var(--text); }
+.v-AI_INFERENCE, .s-NOT-CONNECTED, .s-NOT-IMPORTED { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
 .v-HISTORICAL, .s-historical { opacity: 0.75; }
 
 .alert { background: var(--danger-bg); color: var(--danger); padding: 14px 16px; font-weight: 600; max-width: 760px; margin: 8px auto; border-radius: var(--radius); }
@@ -101,6 +102,7 @@ input[type="date"], input[type="datetime-local"] { -webkit-appearance: none; app
 input[type="date"]::-webkit-date-and-time-value, input[type="datetime-local"]::-webkit-date-and-time-value { text-align: left; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin: 12px 0; }
 .card.attn { border-color: var(--danger); }
+.card .list + h3, #mychart-form + h3, #mychart-form + p { margin-top: 16px; }
 .muted { color: var(--muted); }
 .small { font-size: 0.9rem; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

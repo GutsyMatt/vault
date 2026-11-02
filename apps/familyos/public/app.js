@@ -101,7 +101,7 @@ function renderHeader() {
 	const a = state.ages;
 	$("#ages").textContent = a ? `Age ${a.chronological}${a.corrected ? ` · Corrected ${a.corrected}` : ""}` : "";
 	const t = new Date(state.generated_at);
-	$("#fresh").textContent = `Updated ${t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. ${state.sources.filter((s) => s.status !== "CONNECTED").length} source(s) not connected (see Sources).`;
+	$("#fresh").textContent = `Updated ${t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. ${state.sources.filter((s) => s.status !== "CONNECTED" && s.status !== "IMPORTED").length} source(s) not connected (see Sources).`;
 }
 
 async function renderSetup() {
@@ -167,7 +167,7 @@ function renderToday() {
 		...s.conflicts.map((c) => `<li><span class="badge v-CONFLICT">Conflict</span> ${esc(c.description)}</li>`),
 		...s.issues.filter((i) => i.overdue).map((i) => `<li><span class="badge overdue">Overdue</span> ${esc(i.title)}${i.next_action ? ` → ${esc(i.next_action)}` : ""}</li>`),
 		...s.patterns.map((p) => `<li>${vbadge("AI_INFERENCE")} ${esc(p)}</li>`),
-		...s.sources.filter((x) => x.status !== "CONNECTED").slice(0, 1).map((x) => `<li><span class="badge s-${x.status.replace(" ", "-")}">${esc(x.status)}</span> ${esc(x.name)}: appointments there are not being detected.</li>`),
+		...s.sources.filter((x) => x.status !== "CONNECTED" && x.kind !== "mychart-export").slice(0, 1).map((x) => `<li><span class="badge s-${x.status.replace(" ", "-")}">${esc(x.status)}</span> ${esc(x.name)}: appointments there are not being detected.</li>`),
 	];
 	const n = s.next_appointment;
 	el.innerHTML = `
@@ -467,10 +467,42 @@ async function openIssue(id) {
 }
 
 // ---------- Record ----------
+const FLAG = { high: "High", low: "Low", abnormal: "Abnormal" };
+function clinicalLine(e, { showValue = false } = {}) {
+	const val = [e.value, e.unit].filter(Boolean).join(" ");
+	const flag = e.flag ? ` <span class="badge v-CONFLICT">${esc(FLAG[e.flag] || e.flag)}</span>` : "";
+	const sub = [showValue ? null : e.value, e.ref_range ? `normal ${e.ref_range}` : null, e.status && e.status !== "none-known" ? e.status : null, e.on_date].filter(Boolean).join(" · ");
+	return `<li><div class="row between"><strong>${esc(e.title)}</strong>${showValue && val ? `<span><strong>${esc(val)}</strong>${flag}</span>` : flag}</div>
+		${sub ? `<div class="small">${esc(sub)}</div>` : ""}
+		<div class="small muted">${vbadge(e.verification)} <a href="/api/documents/${esc(e.document_id)}/raw">Original</a> · ${esc(e.source_note || "")}</div></li>`;
+}
+function renderMyChart(s) {
+	const c = s.clinical_record || {};
+	const src = s.sources.find((x) => x.kind === "mychart-export");
+	const group = (title, list, opts) => (list && list.length ? `<h3>${esc(title)}</h3><ul class="list">${list.map((e) => clinicalLine(e, opts)).join("")}</ul>` : "");
+	const any = ["allergies", "problems", "immunizations", "results", "growth", "visits"].some((k) => c[k]?.length);
+	return `<div class="card"><h2>From MyChart</h2>
+		<p class="small muted">${src?.last_success_at ? `Last export imported ${esc(new Date(src.last_success_at).toLocaleString())}. ` : ""}Not a live connection: FamilyOS shows what was in the export you upload. Only exports for ${esc(s.profile.display_name)} are accepted.</p>
+		<form id="mychart-form" class="row">
+			<label for="mychart-file" class="small">MyChart health summary (the .zip or .xml you downloaded)</label>
+			<input id="mychart-file" type="file" accept=".zip,.xml,application/zip,text/xml,application/xml" required>
+			<button type="submit">Import</button>
+		</form>
+		${any ? "" : `<p class="muted">Nothing imported yet. In MyChart, switch to ${esc(s.profile.display_name)}'s chart and look under the menu for <strong>Share My Record → Download</strong> (it may be called "Download health summary"). Upload the file it gives you here.</p>`}
+		${group("Allergies", c.allergies)}
+		${group("Problems", c.problems)}
+		${group("Lab results", c.results, { showValue: true })}
+		${group("Growth and vital signs", c.growth, { showValue: true })}
+		${group("Immunizations", c.immunizations)}
+		${group("Visits", c.visits)}
+	</div>`;
+}
+
 function renderRecord() {
 	const s = state;
 	const el = $('[data-panel="record"]');
 	el.innerHTML = `
+	${renderMyChart(s)}
 	<div class="card"><div class="row between"><h2>Medications</h2><button class="ghost" id="add-med">+ Add</button></div>
 		<ul class="list">${s.medications.map(medLine).join("") || `<li class="muted">None recorded.</li>`}</ul>
 		${s.conflicts.map((c) => `<div class="card attn"><p>${esc(c.description)}</p><button class="ghost" data-resolve="${esc(c.id)}">Record which one is current</button></div>`).join("")}
@@ -491,6 +523,20 @@ function renderRecord() {
 	el.querySelectorAll("[data-resolve]").forEach((b) => b.addEventListener("click", () => resolveConflict(b.dataset.resolve)));
 	$("#add-appt").addEventListener("click", addAppointment);
 	$("#add-med").addEventListener("click", addMedication);
+	$("#mychart-form").addEventListener("submit", async (e) => {
+		e.preventDefault();
+		const f = $("#mychart-file").files[0];
+		if (!f) return;
+		const btn = e.target.querySelector("button");
+		btn.disabled = true;
+		showAlert("");
+		try {
+			const r = await api(`/mychart-import?${new URLSearchParams({ filename: f.name })}`, { method: "POST", headers: { "content-type": "application/octet-stream" }, body: f });
+			const n = Object.values(r.added).reduce((a, b) => a + b, 0);
+			toast(`Imported ${n} new item${n === 1 ? "" : "s"}${r.already_had ? ` (${r.already_had} already here)` : ""}${r.conflict_ids.length ? `. ${r.conflict_ids.length} medication record(s) disagree: see Medications` : ""}.`);
+			await load();
+		} catch (err) { showAlert(err.message); } finally { btn.disabled = false; }
+	});
 	$("#doc-form").addEventListener("submit", async (e) => {
 		e.preventDefault();
 		const f = $("#doc-file").files[0];

@@ -11,6 +11,7 @@ import { DurableObject } from "cloudflare:workers";
 import { formatToronto, sha256Hex, sniffMime, torontoDate, torontoLocalToUtcIso, ulid } from "../core/util";
 import { buildKeepsake, periodLabel, previousPeriod } from "../family/keepsake";
 import { isGooglePhotoUrl, weekOfLife, weekOfLifeForDate } from "../family/story";
+import { readMyChartExport, type CdaDocument } from "../medical/ccda";
 import {
 	EVIDENCE_REQUIRED,
 	ISSUE_STATUSES,
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, at TEXT NOT NULL, acto
 CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, google_id TEXT UNIQUE, taken_at TEXT NOT NULL, filename TEXT, mime TEXT NOT NULL, width INTEGER, height INTEGER, imported_at TEXT NOT NULL, actor TEXT NOT NULL, source TEXT NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL, thumb_size INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS photo_blobs (photo_id TEXT NOT NULL, kind TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (photo_id, kind, idx));
 CREATE TABLE IF NOT EXISTS life_events (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, on_date TEXT NOT NULL, title TEXT NOT NULL, note TEXT, verification TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS clinical_entries (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, actor TEXT NOT NULL, document_id TEXT NOT NULL, kind TEXT NOT NULL, on_date TEXT, title TEXT NOT NULL, value TEXT, unit TEXT, ref_range TEXT, flag TEXT, status TEXT, source_note TEXT, dedupe_key TEXT NOT NULL UNIQUE, verification TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS access_log (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, method TEXT NOT NULL, route TEXT NOT NULL);
 `;
 
@@ -58,6 +60,7 @@ const DEFAULT_SOURCES: [string, string, number | null][] = [
 	["Gmail appointment confirmations", "email", 60],
 	["Google Drive records folder", "drive", 24 * 60],
 	["Hospital records (HHS / CMH)", "records-request", null],
+	["MyChart exports (uploaded)", "mychart-export", null],
 ];
 
 const CHUNK = 1024 * 1024; // DO SQLite rows max 2 MB
@@ -177,6 +180,7 @@ export class PersonVault extends DurableObject<Env> {
 		if (is("POST", "conflicts", "*", "resolve")) return json(this.resolveConflict(p[1], await this.body(request), actor), 201);
 		if (is("POST", "documents")) return json(await this.addDocument(request, url, actor), 201);
 		if (is("GET", "documents", "*", "raw")) return this.rawDocument(p[1]);
+		if (is("POST", "mychart-import")) return json(await this.importMyChart(request, url, actor), 201);
 		if (is("POST", "sources", "*", "report")) return json(this.reportSource(p[1], await this.body(request)), 201);
 		if (is("POST", "tick")) return json(this.tick(Date.now()));
 		if (is("GET", "export")) return json(this.exportAll());
@@ -324,7 +328,15 @@ export class PersonVault extends DurableObject<Env> {
 		const byCat: Record<string, Row[]> = {};
 		for (const o of obs) (byCat[o.category] ||= []).push(o);
 		const patterns = this.patterns();
+		const allergies = this.rows("SELECT title, value, status, verification, on_date FROM clinical_entries WHERE kind = 'allergy' ORDER BY on_date DESC");
 		const sections = [
+			{
+				heading: "Allergies on record",
+				items: allergies.map((a) => ({
+					text: `${a.title}${a.value ? `: ${a.value}` : ""}${a.status && a.status !== "none-known" ? ` (${a.status})` : ""}`,
+					verification: a.verification,
+				})),
+			},
 			{
 				heading: "Open issues to raise",
 				items: issues.map((i) => ({
@@ -461,26 +473,50 @@ export class PersonVault extends DurableObject<Env> {
 
 	// ---------------- medications & conflicts ----------------
 	private addMedication(b: Row, actor: string) {
+		return this.insertMedication(
+			{
+				name: str(b.name, "name", { required: true, max: 120 })!,
+				form: str(b.form, "form", { max: 60 }),
+				strength: str(b.strength, "strength", { max: 60 }),
+				dose_text: str(b.dose_text, "dose_text", { max: 200 }),
+				frequency: str(b.frequency, "frequency", { max: 100 }),
+				prescriber: str(b.prescriber, "prescriber", { max: 120 }),
+				verification: VERIFICATION.includes(b.verification) ? b.verification : "PARENT_REPORT",
+				source_note: str(b.source_note, "source_note"),
+				document_id: str(b.document_id, "document_id", { max: 40 }),
+			},
+			actor,
+		);
+	}
+	private insertMedication(
+		m: { name: string; form: string | null; strength: string | null; dose_text: string | null; frequency: string | null; prescriber: string | null; verification: string; source_note: string | null; document_id: string | null },
+		actor: string,
+		{ historical = false } = {},
+	) {
 		const id = ulid();
-		const name = str(b.name, "name", { required: true, max: 120 })!;
-		const strength = str(b.strength, "strength", { max: 60 });
-		const verification = VERIFICATION.includes(b.verification) ? b.verification : "PARENT_REPORT";
+		const name = m.name;
+		const at = new Date().toISOString();
 		this.sql.exec(
 			"INSERT INTO medications (id, created_at, actor, name, form, strength, dose_text, frequency, prescriber, verification, source_note, document_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			id,
-			new Date().toISOString(),
+			at,
 			actor,
 			name,
-			str(b.form, "form", { max: 60 }),
-			strength,
-			str(b.dose_text, "dose_text", { max: 200 }),
-			str(b.frequency, "frequency", { max: 100 }),
-			str(b.prescriber, "prescriber", { max: 120 }),
-			verification,
-			str(b.source_note, "source_note"),
-			str(b.document_id, "document_id", { max: 40 }),
+			m.form,
+			m.strength,
+			m.dose_text,
+			m.frequency,
+			m.prescriber,
+			m.verification,
+			m.source_note,
+			m.document_id,
 		);
 		this.event(actor, "medication.recorded", { id });
+		if (historical) {
+			// A medicine the record lists as stopped is kept for history and never compared for conflicts.
+			this.sql.exec("INSERT INTO med_status_events (id, med_id, at, actor, status, evidence) VALUES (?, ?, ?, ?, 'historical', ?)", ulid(), id, at, actor, m.source_note ? `Listed as stopped: ${m.source_note}` : "Listed as stopped");
+			return { id, conflict_id: null };
+		}
 		// Same medication recorded with a different strength or dose -> CONFLICT. Never pick one automatically.
 		const others = this.medications().filter(
 			(m) => m.id !== id && m.status !== "historical" && m.name.toLowerCase() === name.toLowerCase(),
@@ -551,11 +587,19 @@ export class PersonVault extends DurableObject<Env> {
 			? url.searchParams.get("verification")!
 			: "EXTRACTED";
 		const note = (url.searchParams.get("note") || "").slice(0, 500) || null;
+		const buf = await this.uploadBytes(request);
+		const mime = sniffMime(buf, declared);
+		if (!mime) throw new HttpError(415, "This file type isn't accepted (PDF, images, text, Word documents only)");
+		return this.storeOriginal(buf, filename, mime, verification, note, actor);
+	}
+	private async uploadBytes(request: Request) {
 		const buf = new Uint8Array(await request.arrayBuffer()) as Uint8Array<ArrayBuffer>;
 		if (!buf.length) throw new HttpError(400, "Empty file");
 		if (buf.length > MAX_UPLOAD) throw new HttpError(413, "File is larger than 20 MB");
-		const mime = sniffMime(buf, declared);
-		if (!mime) throw new HttpError(415, "This file type isn't accepted (PDF, images, text, Word documents only)");
+		return buf;
+	}
+	/** Stores an original byte-for-byte, deduplicated by SHA-256, with a receipt for every upload. */
+	private async storeOriginal(buf: Uint8Array<ArrayBuffer>, filename: string, mime: string, verification: string, note: string | null, actor: string) {
 		const hash = await sha256Hex(buf);
 		const at = new Date().toISOString();
 		const existing = this.one("SELECT * FROM documents WHERE sha256 = ?", hash);
@@ -608,6 +652,119 @@ export class PersonVault extends DurableObject<Env> {
 		});
 	}
 
+	// ---------------- MyChart exports (CDA) ----------------
+	/**
+	 * Imports a MyChart "My Health Summary" export (CDA XML, or MyChart's zip).
+	 * Every document must name this child (given name and birth date) or nothing is
+	 * stored: the twins share a birth date, so the name check is what keeps them apart.
+	 * The original is kept byte-for-byte; entries link back to it and are never edited.
+	 */
+	private async importMyChart(request: Request, url: URL, actor: string) {
+		const profile = this.profile();
+		if (!profile) throw new HttpError(409, "Set up this record first");
+		const filename = (url.searchParams.get("filename") || "mychart-export").replace(/[^\w.\- ()]/g, "_").slice(0, 200);
+		const buf = await this.uploadBytes(request);
+		let parsed: { kind: "zip" | "xml"; documents: CdaDocument[] };
+		try {
+			parsed = await readMyChartExport(buf);
+		} catch (e) {
+			throw new HttpError(422, (e as Error).message || "This file couldn't be read as a MyChart export");
+		}
+		const first = String(profile.display_name).trim().split(/\s+/)[0].toLowerCase();
+		for (const d of parsed.documents) {
+			const given = d.patient.given.map((g) => g.toLowerCase());
+			if (d.patient.birth_date !== profile.birth_date || !given.some((g) => g === first || g.split(/[\s-]+/).includes(first))) {
+				throw new HttpError(422, `This export is not for ${profile.display_name} (the name or birth date doesn't match), so nothing was imported. Make sure you downloaded it from ${profile.display_name}'s MyChart.`);
+			}
+		}
+
+		const doc = await this.storeOriginal(buf, filename, parsed.kind === "zip" ? "application/zip" : "application/xml", "CLINICAL_RECORD", "MyChart export", actor);
+		const added: Record<string, number> = { allergy: 0, problem: 0, immunization: 0, result: 0, vital: 0, encounter: 0, medication: 0 };
+		let alreadyHad = 0;
+		const conflicts: string[] = [];
+		const at = new Date().toISOString();
+		for (const d of parsed.documents) {
+			const note = `MyChart export: ${d.title}${d.organization ? `, ${d.organization}` : ""}${d.created ? `, ${d.created}` : ""}`.slice(0, 2000);
+			for (const e of d.entries) {
+				const key = [e.kind, e.on_date ?? "", e.title, e.value ?? "", e.unit ?? ""].join("|").toLowerCase().slice(0, 1000);
+				const cur = this.sql.exec(
+					"INSERT OR IGNORE INTO clinical_entries (id, created_at, actor, document_id, kind, on_date, title, value, unit, ref_range, flag, status, source_note, dedupe_key, verification) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CLINICAL_RECORD')",
+					ulid(),
+					at,
+					actor,
+					doc.id,
+					e.kind,
+					e.on_date,
+					e.title.slice(0, 300),
+					e.value?.slice(0, 300) ?? null,
+					e.unit?.slice(0, 40) ?? null,
+					e.ref_range?.slice(0, 120) ?? null,
+					e.flag ?? null,
+					e.status?.slice(0, 80) ?? null,
+					note,
+					key,
+				);
+				if (cur.rowsWritten) added[e.kind]++;
+				else alreadyHad++;
+			}
+			for (const m of d.medications) {
+				const same = this.one(
+					"SELECT id FROM medications WHERE lower(name) = lower(?) AND COALESCE(strength, '') = ? AND COALESCE(dose_text, '') = ? AND COALESCE(frequency, '') = ? AND verification = 'CLINICAL_RECORD' AND source_note LIKE 'MyChart export%'",
+					m.name,
+					m.strength ?? "",
+					m.dose_text?.slice(0, 200) ?? "",
+					m.frequency ?? "",
+				);
+				if (same) {
+					alreadyHad++;
+					continue;
+				}
+				const r = this.insertMedication(
+					{
+						name: m.name.slice(0, 120),
+						form: m.form?.slice(0, 60) ?? null,
+						strength: m.strength?.slice(0, 60) ?? null,
+						dose_text: m.dose_text?.slice(0, 200) ?? null,
+						frequency: m.frequency?.slice(0, 100) ?? null,
+						prescriber: m.prescriber?.slice(0, 120) ?? null,
+						verification: "CLINICAL_RECORD",
+						source_note: `${note}${m.start ? `; started ${m.start}` : ""}`.slice(0, 2000),
+						document_id: doc.id,
+					},
+					actor,
+					{ historical: !m.active },
+				);
+				added.medication++;
+				if (r.conflict_id) conflicts.push(r.conflict_id);
+			}
+		}
+		const source = this.one("SELECT id FROM sources WHERE kind = 'mychart-export'");
+		if (source) this.sql.exec("INSERT INTO source_status_events (id, source_id, at, ok, detail) VALUES (?, ?, ?, 1, ?)", ulid(), source.id, at, `Imported ${parsed.documents.length} document(s)`);
+		this.event(actor, "mychart.imported", { document_id: doc.id, documents: parsed.documents.length, added, already_had: alreadyHad });
+		const dates = parsed.documents.map((d) => d.created).filter(Boolean).sort() as string[];
+		return {
+			document_id: doc.id,
+			duplicate: doc.duplicate,
+			documents: parsed.documents.length,
+			exported_on: dates[dates.length - 1] ?? null,
+			added,
+			already_had: alreadyHad,
+			conflict_ids: conflicts,
+			patient_check: "name and birth date match",
+		};
+	}
+	private clinicalRecord() {
+		const group = (kind: string) => this.rows("SELECT * FROM clinical_entries WHERE kind = ? ORDER BY on_date DESC, title", kind);
+		return {
+			allergies: group("allergy"),
+			problems: group("problem"),
+			immunizations: group("immunization"),
+			results: group("result"),
+			growth: group("vital"),
+			visits: group("encounter"),
+		};
+	}
+
 	// ---------------- sources & automation ----------------
 	private reportSource(sourceId: string, b: Row) {
 		if (!this.one("SELECT id FROM sources WHERE id = ?", sourceId)) throw new HttpError(404, "Not found");
@@ -624,6 +781,13 @@ export class PersonVault extends DurableObject<Env> {
 	private sources(nowMs = Date.now()) {
 		return this.rows("SELECT * FROM sources ORDER BY created_at, name").map((s) => {
 			if (s.kind === "manual") return { ...s, status: "CONNECTED", last_success_at: null, detail: "Always available" };
+			if (s.kind === "mychart-export") {
+				// Not a live connection: FamilyOS only knows what's in the last export a parent uploaded.
+				const lastOk = this.one("SELECT at FROM source_status_events WHERE source_id = ? AND ok = 1 ORDER BY at DESC LIMIT 1", s.id);
+				return lastOk
+					? { ...s, status: "IMPORTED", last_success_at: lastOk.at, detail: "Not a live connection. Shows what was in the last MyChart export; upload a new one to update it." }
+					: { ...s, status: "NOT IMPORTED", last_success_at: null, detail: "No MyChart export uploaded yet. Download the health summary from MyChart and upload it under Record." };
+			}
 			const last = this.one("SELECT * FROM source_status_events WHERE source_id = ? ORDER BY at DESC LIMIT 1", s.id);
 			const lastOk = this.one("SELECT at FROM source_status_events WHERE source_id = ? AND ok = 1 ORDER BY at DESC LIMIT 1", s.id);
 			let status = "NOT CONNECTED";
@@ -944,6 +1108,7 @@ export class PersonVault extends DurableObject<Env> {
 			last_automation_run: lastRun,
 			red_flag_guidance: RED_FLAG_GUIDANCE,
 			keepsake: this.keepsakeSummary(),
+			clinical_record: this.clinicalRecord(),
 		};
 	}
 	/** Compact, attention-first view for the parent (household) dashboard. */
@@ -959,13 +1124,13 @@ export class PersonVault extends DurableObject<Env> {
 			meds_needing_check: s.medications.filter((m: Row) => m.status === "unverified" || m.in_conflict).length,
 			patterns: s.patterns,
 			urgent_last_24h: s.observations.filter((o: Row) => o.red_flags.length && Date.parse(o.at) > Date.now() - 86400000).length,
-			sources_not_connected: s.sources.filter((x: Row) => x.status !== "CONNECTED").map((x: Row) => ({ name: x.name, status: x.status })),
+			sources_not_connected: s.sources.filter((x: Row) => x.status !== "CONNECTED" && x.status !== "IMPORTED").map((x: Row) => ({ name: x.name, status: x.status })),
 			last_log: s.observations[0] ? { when: s.observations[0].when, category: s.observations[0].category } : null,
 		};
 	}
 
 	private exportAll() {
-		const tables = ["events", "profile_versions", "observations", "appointments", "briefs", "issues", "issue_status_events", "medications", "med_status_events", "conflicts", "conflict_resolutions", "documents", "doc_receipts", "sources", "source_status_events", "automation_runs", "letters", "keepsake_marks", "keepsakes", "keepsake_deliveries", "settings", "photos", "life_events"];
+		const tables = ["events", "profile_versions", "observations", "appointments", "briefs", "issues", "issue_status_events", "medications", "med_status_events", "conflicts", "conflict_resolutions", "documents", "doc_receipts", "sources", "source_status_events", "automation_runs", "letters", "keepsake_marks", "keepsakes", "keepsake_deliveries", "settings", "photos", "life_events", "clinical_entries"];
 		const out: Record<string, Row[]> = {};
 		for (const t of tables) out[t] = this.rows(`SELECT * FROM ${t}`);
 		return { exported_at: new Date().toISOString(), format: "familyos-person-export/v1", note: "Document bytes are downloadable individually via /api/documents/:id/raw", tables: out };
