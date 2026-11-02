@@ -197,6 +197,7 @@ export class PersonVault extends DurableObject<Env> {
 			const b = await this.body(request);
 			if (!this.one("SELECT id FROM documents WHERE id = ? AND sha256 = ?", b.document_id, b.source_hash)) throw new HttpError(400, "Source document not verified");
 			this.sql.exec("INSERT INTO drive_imports (source_id,source_hash,source_version,document_id,imported_at) VALUES (?,?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET source_hash=excluded.source_hash,source_version=excluded.source_version,document_id=excluded.document_id,imported_at=excluded.imported_at",p[1],b.source_hash,b.source_version,b.document_id,new Date().toISOString());
+			this.event(actor, "drive.source_revision_imported", {source_id:p[1],document_id:b.document_id,source_hash:b.source_hash,review_state:"EXTRACTED"});
 			return json({recorded:true});
 		}
 		if (is("POST", "documents")) return json(await this.addDocument(request, url, actor), 201);
