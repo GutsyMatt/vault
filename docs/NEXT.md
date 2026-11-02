@@ -15,7 +15,7 @@ Read `CLAUDE.md`, then this file, then `docs/STATUS.md`. Don't ask Matthew to re
 - No demo data, ever.
 
 ## Do next, in order
-1. **Waiting on Matthew's yes:** "Yes, use the Drive records". This is the AI data-handling approval from the directive. Once given, add past life events for each boy from Drive (search "Callum", "Finnley", "NICU", "MyChart", "discharge", "cardiology", "Holter") using the automation key. Mark them `EXTRACTED` and include the source doc link in the note. Never mix the twins. Add the propranolol record pair (1 mg/mL vs 5 mg/mL) as two medication records, so the app flags the conflict.
+1. **Approved by Matthew 2026-11-02 ("Yes use drive records")**, which is the AI data-handling approval from the directive. add past life events for each boy from Drive (search "Callum", "Finnley", "NICU", "MyChart", "discharge", "cardiology", "Holter") using the automation key. Mark them `EXTRACTED` and include the source doc link in the note. Never mix the twins. Add the propranolol record pair (1 mg/mL vs 5 mg/mL) as two medication records, so the app flags the conflict.
 2. **Google Calendar API:** Matthew was asked to enable it (https://console.cloud.google.com/apis/library/calendar-json.googleapis.com?project=406206707598). Then build the background Google connection (one "Connect Google" tap; it needs offline OAuth and a client secret stored server-side). Use it for appointment detection from calendars and Gmail.
 3. **Email the monthly keepsake letters** to the boys' Gmail addresses (Callum `hnatejkoc@gmail.com`, Finnley `hnatejkof@gmail.com`; enter them via each boy's Letters setting once email works) through the same Google connection.
 4. Rename the repo `vault` → `familyOS` (Matthew's account is now `LibbyHD`).
