@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS conflicts (id TEXT PRIMARY KEY, created_at TEXT NOT N
 CREATE TABLE IF NOT EXISTS conflict_resolutions (id TEXT PRIMARY KEY, conflict_id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, chosen_id TEXT NOT NULL, evidence TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, filename TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, received_at TEXT NOT NULL, actor TEXT NOT NULL, verification TEXT NOT NULL, note TEXT);
 CREATE TABLE IF NOT EXISTS doc_chunks (doc_id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (doc_id, idx));
+CREATE TABLE IF NOT EXISTS drive_sync_runs (id TEXT PRIMARY KEY, at TEXT NOT NULL, person TEXT NOT NULL, scanned INTEGER NOT NULL, stored INTEGER NOT NULL, duplicates INTEGER NOT NULL, skipped INTEGER NOT NULL, errors INTEGER NOT NULL, detail TEXT);
+CREATE TABLE IF NOT EXISTS drive_import_failures (source_id TEXT PRIMARY KEY, at TEXT NOT NULL, reason TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS drive_imports (source_id TEXT PRIMARY KEY, source_hash TEXT NOT NULL, source_version TEXT NOT NULL, document_id TEXT NOT NULL, imported_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS doc_receipts (id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, filename TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, expected_interval_min INTEGER, created_at TEXT NOT NULL);
@@ -176,6 +178,20 @@ export class PersonVault extends DurableObject<Env> {
 		if (is("GET", "issues", "*")) return json(this.issueDetail(p[1]));
 		if (is("POST", "medications")) return json(this.addMedication(await this.body(request), actor), 201);
 		if (is("POST", "conflicts", "*", "resolve")) return json(this.resolveConflict(p[1], await this.body(request), actor), 201);
+		if (is("GET", "drive-sync", "status")) return json({runs:this.rows("SELECT * FROM drive_sync_runs ORDER BY at DESC LIMIT 10"),failures:this.rows("SELECT * FROM drive_import_failures ORDER BY at DESC LIMIT 50")});
+		if (is("POST", "drive-sync", "report")) {
+			const b=await this.body(request);
+			const n=(key:string)=>{const v=b[key];if(!Number.isSafeInteger(v)||v<0||v>10000)throw new HttpError(400,"Invalid sync counter");return v as number};
+			const person=str(b.person,"person",{required:true,max:64})!;
+			this.sql.exec("INSERT INTO drive_sync_runs (id,at,person,scanned,stored,duplicates,skipped,errors,detail) VALUES (?,?,?,?,?,?,?,?,?)",ulid(),new Date().toISOString(),person,n("scanned"),n("stored"),n("duplicates"),n("skipped"),n("errors"),str(b.detail,"detail",{max:300}));
+			return json({recorded:true},201);
+		}
+		if (is("POST", "drive-sync", "failure")) {
+			const b=await this.body(request);
+			const sourceId=str(b.source_id,"source_id",{required:true,max:200})!, reason=str(b.reason,"reason",{required:true,max:150})!;
+			this.sql.exec("INSERT INTO drive_import_failures(source_id,at,reason,attempts) VALUES (?,?,?,1) ON CONFLICT(source_id) DO UPDATE SET at=excluded.at,reason=excluded.reason,attempts=attempts+1",sourceId,new Date().toISOString(),reason);
+			return json({recorded:true},201);
+		}
 		if (is("GET", "drive-imports", "*")) return json(this.one("SELECT source_hash, source_version, document_id FROM drive_imports WHERE source_id = ?", p[1]) ?? {source_hash:null});
 		if (is("POST", "drive-imports", "*")) {
 			const b = await this.body(request);
