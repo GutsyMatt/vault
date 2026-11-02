@@ -25,6 +25,7 @@ Elsewhere, "verified" means verified **locally**: automated tests (synthetic val
 | Full JSON export per person | PARTIAL (tested locally) | Test "export" | |
 | Keepsake letters: parents write letters; "keep this for him" on log entries; a monthly letter per child (1st of the month, previous month), stored permanently and in the export; medical details excluded unless kept on purpose | PARTIAL (tested locally) | Tests "keepsake letters"; browser check of Letters tab | Email delivery (B7) |
 | Keepsake email delivery to each boy's own address | NOT IMPLEMENTED | Each letter records `NOT_SENT_DELIVERY_NOT_CONNECTED` or `NOT_SENT_NO_ADDRESS`, never silent | B7 |
+| His story by week: photos picked in Google Photos (Google's picker) copied into that child's record (2048px copy + preview; original stays in Google Photos), past events, firsts and letters grouped by week of life | PARTIAL (tested locally with a fake Google) | Tests "photos and his story by week"; browser check of Story tab | Real import needs the Photos Picker API enabled (B8), then a first real run |
 | Google Calendar / Gmail / Drive connectors | NOT IMPLEMENTED | Sources page shows them as NOT CONNECTED | Needs OAuth approval (B4) |
 | Growth charts, milestones, specialty-specific brief templates, family overview, TV mode | NOT IMPLEMENTED | | Phase 4 |
 | Notifications (email digest) | NOT IMPLEMENTED | | Phase 3 |
@@ -49,6 +50,7 @@ Known risk at step 3: the Workers Builds token may lack permission to create the
 | # | Blocked | Needed |
 |---|---|---|
 | B7 | Emailing the boys' monthly letters | `libbyhd.org` mail runs on Google Workspace (MX → Google), so Cloudflare email can't be used without moving mail. Needs one Google sending credential (e.g. a `family@libbyhd.org` mailbox authorised for Gmail sending). The boys' Gmail addresses are already created; enter them in each boy's Letters tab |
+| B8 | Importing from Google Photos | Turn on the "Photos Picker API" in the LifeOS Google project (one button). Storage note: photos live in each child's Durable Object; watch the total shown on the Story tab, and move photos to R2 if it grows past a few GB |
 | B4 | Calendar, Gmail and Drive connectors | Uses the same LifeOS Google project. Later phase |
 | B5 | Any AI on health data | Approve a data-handling note |
 | B6 | Repo name `LibbyHD/familyOS` | Account rename to `LibbyHD` is **done** (2026-11-02). Remaining: rename the repo `vault` → `familyOS` in Settings → General, then confirm Cloudflare → vault → Settings → Build still shows it connected |

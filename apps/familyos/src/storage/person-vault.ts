@@ -10,6 +10,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { formatToronto, sha256Hex, sniffMime, torontoDate, torontoLocalToUtcIso, ulid } from "../core/util";
 import { buildKeepsake, periodLabel, previousPeriod } from "../family/keepsake";
+import { isGooglePhotoUrl, weekOfLife, weekOfLifeForDate } from "../family/story";
 import {
 	EVIDENCE_REQUIRED,
 	ISSUE_STATUSES,
@@ -45,6 +46,9 @@ CREATE TABLE IF NOT EXISTS keepsake_marks (id TEXT PRIMARY KEY, at TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS keepsakes (id TEXT PRIMARY KEY, period TEXT NOT NULL, created_at TEXT NOT NULL, trigger TEXT NOT NULL, subject TEXT NOT NULL, text TEXT NOT NULL, html TEXT NOT NULL, counts TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS keepsake_deliveries (id TEXT PRIMARY KEY, keepsake_id TEXT NOT NULL, at TEXT NOT NULL, status TEXT NOT NULL, detail TEXT);
 CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, key TEXT NOT NULL, value TEXT);
+CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, google_id TEXT UNIQUE, taken_at TEXT NOT NULL, filename TEXT, mime TEXT NOT NULL, width INTEGER, height INTEGER, imported_at TEXT NOT NULL, actor TEXT NOT NULL, source TEXT NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL, thumb_size INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS photo_blobs (photo_id TEXT NOT NULL, kind TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (photo_id, kind, idx));
+CREATE TABLE IF NOT EXISTS life_events (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, on_date TEXT NOT NULL, title TEXT NOT NULL, note TEXT, verification TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS access_log (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, method TEXT NOT NULL, route TEXT NOT NULL);
 `;
 
@@ -177,6 +181,14 @@ export class PersonVault extends DurableObject<Env> {
 		if (is("POST", "tick")) return json(this.tick(Date.now()));
 		if (is("GET", "export")) return json(this.exportAll());
 		if (is("POST", "letters")) return json(this.addLetter(await this.body(request), actor), 201);
+		if (is("POST", "photos", "import")) {
+			const b = await this.body(request);
+			return json(await this.importPhotos(b.items, b.token, actor), 201);
+		}
+		if (is("GET", "photos", "*", "thumb")) return this.photoBytes(p[1], "thumb");
+		if (is("GET", "photos", "*", "image")) return this.photoBytes(p[1], "image");
+		if (is("POST", "life-events")) return json(this.addLifeEvent(await this.body(request), actor), 201);
+		if (is("GET", "story")) return json(this.story());
 		if (is("POST", "keep")) return json(this.keep(await this.body(request), actor), 201);
 		if (is("PUT", "settings", "keepsake-email")) return json(this.setKeepsakeEmail(await this.body(request), actor), 201);
 		if (is("POST", "keepsakes", "compile")) return json(this.compileKeepsake((await this.body(request)).period, "requested-by-parent", Date.now()), 201);
@@ -784,6 +796,116 @@ export class PersonVault extends DurableObject<Env> {
 		if (!k) throw new HttpError(404, "Not found");
 		return new Response(k.html, { headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'" } });
 	}
+	// ---------------- photos & his story by week ----------------
+	/**
+	 * Copy photos the parent picked in Google's photo picker into this child's record.
+	 * The Google access token is used only for these downloads and never stored or logged.
+	 * Keeps a 2048px copy plus a small preview; the full original stays in Google Photos.
+	 */
+	async importPhotos(itemsIn: unknown, tokenIn: unknown, actor: string, fetcher: typeof fetch = fetch) {
+		if (!Array.isArray(itemsIn) || !itemsIn.length || itemsIn.length > 10) throw new HttpError(400, "Send 1–10 photos at a time");
+		if (typeof tokenIn !== "string" || tokenIn.length < 10 || tokenIn.length > 4096) throw new HttpError(400, "Missing Google access");
+		const results: { google_id: string; status: string }[] = [];
+		for (const it of itemsIn as Row[]) {
+			const gid = typeof it.id === "string" ? it.id.slice(0, 200) : "";
+			const baseUrl = typeof it.baseUrl === "string" ? it.baseUrl : "";
+			if (!gid || !isGooglePhotoUrl(baseUrl)) {
+				results.push({ google_id: gid, status: "rejected" });
+				continue;
+			}
+			if (this.one("SELECT id FROM photos WHERE google_id = ?", gid)) {
+				results.push({ google_id: gid, status: "already-saved" });
+				continue;
+			}
+			const takenMs = Date.parse(String(it.createTime || ""));
+			try {
+				const get = async (suffix: string) => {
+					const r = await fetcher(`${baseUrl}${suffix}`, { headers: { authorization: `Bearer ${tokenIn}` } });
+					if (!r.ok) throw new Error(String(r.status));
+					return new Uint8Array(await r.arrayBuffer()) as Uint8Array<ArrayBuffer>;
+				};
+				const image = await get("=w2048-h2048");
+				const thumb = await get("=w480-h480-c");
+				const mime = sniffMime(image, "image/jpeg") || "image/jpeg";
+				const id = ulid();
+				const sha = await sha256Hex(image);
+				this.ctx.storage.transactionSync(() => {
+					this.sql.exec(
+						"INSERT INTO photos (id, google_id, taken_at, filename, mime, width, height, imported_at, actor, source, sha256, size, thumb_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'google-photos-picker', ?, ?, ?)",
+						id,
+						gid,
+						Number.isFinite(takenMs) ? new Date(takenMs).toISOString() : new Date().toISOString(),
+						typeof it.filename === "string" ? it.filename.slice(0, 200) : null,
+						mime,
+						Number(it.width) || null,
+						Number(it.height) || null,
+						new Date().toISOString(),
+						actor,
+						sha,
+						image.length,
+						thumb.length,
+					);
+					for (const [kind, bytes] of [["image", image], ["thumb", thumb]] as const) {
+						for (let i = 0, idx = 0; i < bytes.length; i += CHUNK, idx++) {
+							this.sql.exec("INSERT INTO photo_blobs (photo_id, kind, idx, data) VALUES (?, ?, ?, ?)", id, kind, idx, bytes.slice(i, i + CHUNK).buffer);
+						}
+					}
+				});
+				results.push({ google_id: gid, status: "saved" });
+			} catch {
+				results.push({ google_id: gid, status: "download-failed" });
+			}
+		}
+		this.event(actor, "photos.imported", { saved: results.filter((r) => r.status === "saved").length });
+		return { results };
+	}
+	private photoBytes(id: string, kind: "thumb" | "image"): Response {
+		const ph = this.one("SELECT mime, filename FROM photos WHERE id = ?", id);
+		if (!ph) throw new HttpError(404, "Not found");
+		const chunks = this.rows("SELECT data FROM photo_blobs WHERE photo_id = ? AND kind = ? ORDER BY idx", id, kind);
+		const parts = chunks.map((c) => new Uint8Array(c.data as ArrayBuffer));
+		const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+		let off = 0;
+		for (const part of parts) {
+			out.set(part, off);
+			off += part.length;
+		}
+		return new Response(out, { headers: { "content-type": ph.mime, "cache-control": "private, max-age=86400" } });
+	}
+	private addLifeEvent(b: Row, actor: string) {
+		const on = str(b.on_date, "on_date", { required: true, max: 10 })!;
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) throw new HttpError(400, "Date must be YYYY-MM-DD");
+		const id = ulid();
+		this.sql.exec(
+			"INSERT INTO life_events (id, at, actor, on_date, title, note, verification) VALUES (?, ?, ?, ?, ?, ?, 'PARENT_REPORT')",
+			id,
+			new Date().toISOString(),
+			actor,
+			on,
+			str(b.title, "title", { required: true, max: 200 }),
+			str(b.note, "note", { max: 4000 }),
+		);
+		this.event(actor, "life_event.added", { id });
+		return { id };
+	}
+	/** Everything in his story, grouped by week of life, newest first. */
+	story() {
+		const profile = this.profile();
+		if (!profile) return { weeks: [], photos: 0, bytes: 0 };
+		type Week = { week: number; start: string; end: string; photos: Row[]; events: Row[]; firsts: Row[]; letters: Row[] };
+		const weeks = new Map<number, Week>();
+		const slot = (w: { week: number; start: string; end: string }) => {
+			if (!weeks.has(w.week)) weeks.set(w.week, { ...w, photos: [], events: [], firsts: [], letters: [] });
+			return weeks.get(w.week)!;
+		};
+		for (const ph of this.rows("SELECT id, taken_at FROM photos ORDER BY taken_at")) slot(weekOfLife(profile.birth_date, Date.parse(ph.taken_at))).photos.push(ph);
+		for (const ev of this.rows("SELECT id, on_date, title, note FROM life_events ORDER BY on_date")) slot(weekOfLifeForDate(profile.birth_date, ev.on_date)).events.push(ev);
+		for (const o of this.rows("SELECT id, at, text FROM observations WHERE category = 'milestone' ORDER BY at")) slot(weekOfLife(profile.birth_date, Date.parse(o.at))).firsts.push(o);
+		for (const l of this.rows("SELECT id, at, signed_as, title FROM letters ORDER BY at")) slot(weekOfLife(profile.birth_date, Date.parse(l.at))).letters.push(l);
+		const totals = this.one("SELECT COUNT(*) AS n, COALESCE(SUM(size + thumb_size), 0) AS b FROM photos")!;
+		return { weeks: [...weeks.values()].sort((a, b) => b.week - a.week), photos: totals.n, bytes: totals.b };
+	}
+
 	private keepsakeSummary() {
 		return {
 			email: this.setting("keepsake_email"),
@@ -841,7 +963,7 @@ export class PersonVault extends DurableObject<Env> {
 	}
 
 	private exportAll() {
-		const tables = ["events", "profile_versions", "observations", "appointments", "briefs", "issues", "issue_status_events", "medications", "med_status_events", "conflicts", "conflict_resolutions", "documents", "doc_receipts", "sources", "source_status_events", "automation_runs", "letters", "keepsake_marks", "keepsakes", "keepsake_deliveries", "settings"];
+		const tables = ["events", "profile_versions", "observations", "appointments", "briefs", "issues", "issue_status_events", "medications", "med_status_events", "conflicts", "conflict_resolutions", "documents", "doc_receipts", "sources", "source_status_events", "automation_runs", "letters", "keepsake_marks", "keepsakes", "keepsake_deliveries", "settings", "photos", "life_events"];
 		const out: Record<string, Row[]> = {};
 		for (const t of tables) out[t] = this.rows(`SELECT * FROM ${t}`);
 		return { exported_at: new Date().toISOString(), format: "familyos-person-export/v1", note: "Document bytes are downloadable individually via /api/documents/:id/raw", tables: out };

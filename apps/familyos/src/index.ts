@@ -17,7 +17,9 @@ export { PersonVault } from "./storage/person-vault";
 
 const SECURITY_HEADERS: Record<string, string> = {
 	"content-security-policy":
-		"default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+		"default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; connect-src 'self' https://photospicker.googleapis.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+	// Google's photo-picker sign-in uses a popup that must be able to report back.
+	"cross-origin-opener-policy": "same-origin-allow-popups",
 	"x-frame-options": "DENY",
 	"x-content-type-options": "nosniff",
 	"referrer-policy": "no-referrer",
@@ -187,7 +189,7 @@ export default {
 
 		if (url.pathname === "/api/whoami") {
 			return withHeaders(
-				Response.json({ email: auth.principal.email, via: auth.principal.via, mode: isHousehold ? "household" : "person", person }),
+				Response.json({ email: auth.principal.email, via: auth.principal.via, mode: isHousehold ? "household" : "person", person, google_client_id: env.GOOGLE_CLIENT_ID ?? null }),
 				NOSTORE,
 			);
 		}
