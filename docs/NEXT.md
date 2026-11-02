@@ -35,3 +35,12 @@ Read `CLAUDE.md`, then this file, then `docs/STATUS.md`. Don't ask Matthew to re
 - `FamilyOS — Callum/Finnley — Longitudinal Patient File and Record Gaps` (`1O20VsCj…`, `1StK-mxk…`): turn record gaps into issues (records requests to CMH and HHS).
 - `GP Vaccine Visit Brief and Open Referral Register` (`1pbZtBhP…`): add the Nov 2 vaccination appointment and the open referrals as issues.
 - Cambridge Memorial (CMH) records: none in Drive yet. That's a records request to track as an issue.
+
+## Otter.ai (connector available as `mcp__Otter_ai__*`)
+About 20 recordings since July mention the boys. Search: `otter_search` with `keywords_in_transcript: "Finnley,Callum"`, `created_after: 2026/04/01`.
+- **Loaded 2026-11-02:** 2-month vaccines on 19 Aug (both); Callum's 23 Sep pediatric follow-up (event, plus an issue to confirm the February repeat echo); an issue for Finnley's cardiology follow-up from the 2 Sep visit (confirm booking, send weight for propranolol dose). All marked `EXTRACTED` with the Otter link and "machine transcript, unverified".
+- **Still to mine** (clinical first): `e39FP9Gld9JLqa1RNu4tMeAsY8k` (Finnley SVT plan: home heart-rate checks, ice manoeuvre, 911 criteria; add as care-plan notes or issues, never as new orders); `2Ocp8LM9B9_j7wJSGFZYZpKtjas` and `XreODMGYrKdwMstsHCJhanPmB50` (July discharge coordination; find Callum's and Finnley's actual discharge-home dates); `haaEhue7E6nreFXKF7MK-g0uUyo` (parents feel Finnley's vomiting and choking was under-reported; raise as an issue for the GP); `8QZm8lXXohfbPk6lN_ss2xVOF1s` and `HaP_YqrnYn10C6Nshyx4d866fpY` (feeding volumes and bottle and nipple sizes per twin, for family-life notes). Household or non-clinical recordings: only take moments that are clearly about one boy.
+- **Rule:** an Otter mention is never a clinical finding. Label each entry `EXTRACTED` with the recording link, and **double-check which twin** each line refers to, because transcripts confuse "Finley/Finlay/Callum".
+
+## iOS Voice Memos
+Not reachable directly; Apple has no API. Plan that needs nothing from Matthew day to day: export once from the Mac/iPhone into a Drive folder `FAMILYOS/01_INBOX/voice-memos` (the historical `voice-memo-transcription` repo may already do this; check the registry). Then transcribe and file each memo per boy, the same way as Otter. If nothing is in Drive yet, ask Matthew for a single "share all memos to Drive" step, giving him the exact taps.
