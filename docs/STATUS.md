@@ -2,6 +2,8 @@
 
 Last updated: 2026-11-02, by a Claude Code session. Status words: `VERIFIED OPERATIONAL` / `PARTIAL` / `BLOCKED` / `NOT IMPLEMENTED`.
 
+**Sign-in VERIFIED OPERATIONAL (2026-11-02 ~04:39 UTC):** Matthew signed in with Google on his iPhone and reached the parent site and Callum's setup screen (screenshots in the Claude session). Both profiles are set up (Callum by Matthew; Finnley by Claude's automation key, approved by Matthew), and ages compute correctly on the live site.
+
 **Deployed 2026-11-02 ~04:05 UTC** (merge of PRs #2, #3, #5 → Workers Builds → Worker `vault`, v0.3.0). Verified from outside the home network: `familyos.`, `callum.` and `finnley.libbyhd.org` resolve, serve valid HTTPS, and show only the Google sign-in page. `/api/summary` and `/api/export` return 401 without sign-in; a forged session cookie gets 401; a cross-site write gets 403; `vault.mattherbert01.workers.dev` now returns 404. **Not yet verified:** a successful sign-in with real data, because Google first needs the three addresses added as authorized JavaScript origins (Path to live, step 1).
 
 Elsewhere, "verified" means verified **locally**: automated tests (synthetic values inside test files only) plus a real browser run against an empty store. The app contains no demo data. **Nothing is deployed yet**, so no feature is `VERIFIED OPERATIONAL` in production.
