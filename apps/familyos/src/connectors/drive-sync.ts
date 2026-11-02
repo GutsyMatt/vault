@@ -1,3 +1,4 @@
+import { sha256Hex } from "../core/util";
 import type { Env } from "../types";
 import { MAX_UPLOAD } from "../storage/person-vault";
 
@@ -9,7 +10,7 @@ export function acceptedDriveItem(f:DriveItem):boolean {
 }
 export async function syncDriveFolder(env: Env, person:string, folder:string, opts:{fetcher?:typeof fetch; dryRun?:boolean}={}):Promise<{scanned:number;stored:number;duplicates:number;skipped:number;errors:number}> {
  const result={scanned:0,stored:0,duplicates:0,skipped:0,errors:0};
- if(!folder||!person)throw Error("Folder and person required");
+ if(!/^[A-Za-z0-9_-]{8,200}$/.test(folder)||!["callum","finnley"].includes(person))throw Error("Invalid approved Drive folder or person");
  if(!env.DRIVE_CLIENT_ID||!env.DRIVE_CLIENT_SECRET||!env.DRIVE_REFRESH_TOKEN)throw Error("Google Drive OAuth secrets not configured");
  const fetcher=opts.fetcher||fetch;
  const tokenRes=await fetcher("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:env.DRIVE_CLIENT_ID,client_secret:env.DRIVE_CLIENT_SECRET,refresh_token:env.DRIVE_REFRESH_TOKEN,grant_type:"refresh_token"})});
@@ -49,7 +50,9 @@ export async function syncDriveFolder(env: Env, person:string, folder:string, op
    docUrl.searchParams.set("note","Google Drive file ID: "+f.id);
    const saved=await dest.fetch(new Request(docUrl,{method:"POST",headers:{"content-type":f.mimeType,"x-actor":"system:drive-ingestion","x-route":"/documents"},body:data}));
    if(!saved.ok){result.errors++;continue}
-   const receipt=await saved.json() as {duplicate?:boolean};
+   const receipt=await saved.json() as {duplicate?:boolean;id?:string;sha256?:string};
+   const computedHash=await sha256Hex(new Uint8Array(data));
+   if(receipt.sha256!==computedHash){result.errors++;continue}
    if(!receipt.id){result.errors++;continue}
    const confirmed=await dest.fetch("https://vault/drive-imports/"+encodeURIComponent(f.id),{method:"POST",headers:{"content-type":"application/json","x-actor":"system:drive-ingestion"},body:JSON.stringify({document_id:receipt.id,source_hash:receipt.sha256,source_version:sourceVersion})});
    if(!confirmed.ok){result.errors++;continue}
