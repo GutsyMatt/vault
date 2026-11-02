@@ -1,13 +1,8 @@
 /**
- * Type definitions for the LLM chat application.
+ * Type definitions for LibbyHD.
  */
 
 export interface Env {
-	/**
-	 * Binding for the Workers AI API.
-	 */
-	AI: Ai;
-
 	/**
 	 * Binding for static assets.
 	 */
@@ -65,10 +60,3 @@ export interface PatientSession {
 	fhirBaseUrl: string;
 }
 
-/**
- * Represents a chat message.
- */
-export interface ChatMessage {
-	role: "system" | "user" | "assistant";
-	content: string;
-}

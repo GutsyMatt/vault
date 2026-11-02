@@ -1,6 +1,6 @@
 {
 	"name": "vault",
-	"description": "A simple chat application powered by Cloudflare Workers AI",
+	"description": "LibbyHD: see your MyChart health record in one place",
 	"cloudflare": {
 		"label": "LLM Chat App",
 		"products": [
