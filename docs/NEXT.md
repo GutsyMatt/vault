@@ -59,3 +59,13 @@ Design:
 4. **Backfill:** the Drive `imessage_*.jsonl` files (22 Sep–21 Oct). Also find what fills the 21 Oct → today gap; the BlueBubbles server API can page history.
 
 Access status (2026-11-02): Remote Control lists computer "Libby", folder `libby_live`, as **not available to cloud sessions** (probably the Windows PC). The **MacBook** needs to be added: Claude desktop app on the MacBook → Settings → Claude Code → Remote Control → add a folder that isn't hidden (e.g. `~/FamilyOS`). Then call `list_computer_folders` and `request_computer_folder` to configure the webhook and fix `bluebubbles_phone_agent.py`.
+
+## CORRECTION 2026-11-02 11:3x UTC: iMessage capture did NOT stop
+Verified by a Claude session running on the MacBook (Remote Control environment `Libby-Macbook:FAMILYOS`):
+- Capture runs through launchd `ca.natico.bluebubbles-bridge` (`~/scripts/bluebubbles_bridge.py`). It reads the BlueBubbles server API every 5 minutes and has run 865 times since 21 Oct with 1 error.
+- Daily files are in **`FamilyOS/USERID001/IOS/BLUEBUBBLES/chats/`** (one level down). Day by day, 21 Oct → 2 Nov matches the server: 2,339 messages, nothing missing.
+- Earlier "stopped on 21 Oct" notes in this file are wrong: only the status and summary docs in the parent folder stopped. The old `~/bluebubbles_phone_agent.py` crashed on 21 Oct ("database disk image is malformed") and was retired that day.
+- BlueBubbles REST API is on port 1234, on all interfaces, reachable over Tailscale (100.112.197.83). There's no TLS, the password is passed in the URL, and the Mac firewall is off. **Restrict it to Tailscale before building the FamilyOS webhook receiver.** One webhook already exists, to `localhost:8645/bluebubbles-web` (OpenClaw handshake-sync).
+- Another session was running a full-history backfill and a contact profiler (started about 05:29). The 5-minute capture pauses while the backfill holds the lock, then catches up.
+- Clean-up candidates (don't delete without Matthew): duplicate same-name files for 21–23 Sep in `chats/`; about 640 MB of `imessage_chunk_*` and `imessage_full_dump_*` dumps.
+- `Matthew.familyOS.db` is a static snapshot. The MacBook session was asked to add a chat.db → db incremental sync (launchd WatchPaths plus a 600 s backstop, with a heartbeat at `~/FAMILYOS/logs/sync_status.json`). Matthew says Full Disk Access was already granted. **Verify the heartbeat before relying on it.**
