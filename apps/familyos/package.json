@@ -1,0 +1,13 @@
+{
+	"name": "familyos",
+	"private": true,
+	"description": "FamilyOS: CallumOS + FinnleyOS (first slice of the NATICO platform)",
+	"scripts": {
+		"dev:callum": "wrangler dev --port 8787 --local-upstream callum.localhost",
+		"dev:finnley": "wrangler dev --port 8788 --inspector-port 9230 --local-upstream finnley.localhost",
+		"typecheck": "tsc -p .",
+		"test": "vitest run",
+		"check": "tsc -p . && vitest run && wrangler deploy --dry-run",
+		"deploy": "wrangler deploy"
+	}
+}

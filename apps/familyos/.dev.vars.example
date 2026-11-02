@@ -1,0 +1,3 @@
+# Copy to .dev.vars for local development. Never commit .dev.vars.
+DEV_AUTH_EMAIL=parent@example.test
+HOST_PERSON_MAP={"callum.localhost":"callum","finnley.localhost":"finnley"}

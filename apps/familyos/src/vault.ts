@@ -1,0 +1,718 @@
+/**
+ * PersonVault: one Durable Object (SQLite) per person.
+ *
+ * Isolation by construction: the Worker picks the object from the request
+ * hostname only, so an id belonging to another person simply does not exist
+ * here (404). Clinical tables are append-only: there are no UPDATE or DELETE
+ * statements on them anywhere in this file. Status changes, supersessions and
+ * resolutions are new rows.
+ */
+import { DurableObject } from "cloudflare:workers";
+import {
+	EVIDENCE_REQUIRED,
+	ISSUE_STATUSES,
+	RED_FLAG_GUIDANCE,
+	VERIFICATION,
+	computeAges,
+	detectRedFlags,
+	formatToronto,
+	parseRapidLog,
+	sha256Hex,
+	sniffMime,
+	torontoLocalToUtcIso,
+	ulid,
+	type IssueStatus,
+} from "./lib";
+import type { Env } from "./types";
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS profile_versions (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, text TEXT NOT NULL, category TEXT NOT NULL, duration_min INTEGER, volume_ml INTEGER, tags TEXT NOT NULL, red_flags TEXT NOT NULL, verification TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS appointments (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, actor TEXT NOT NULL, starts_at TEXT NOT NULL, title TEXT NOT NULL, provider TEXT, specialty TEXT, location TEXT, details_verified INTEGER NOT NULL, discovered_via TEXT NOT NULL, source_note TEXT);
+CREATE TABLE IF NOT EXISTS briefs (id TEXT PRIMARY KEY, appointment_id TEXT NOT NULL, created_at TEXT NOT NULL, trigger TEXT NOT NULL, content TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS issues (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, actor TEXT NOT NULL, title TEXT NOT NULL, specialty TEXT, owner TEXT, first_reported TEXT, source_note TEXT, verification TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS issue_status_events (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, status TEXT NOT NULL, evidence TEXT, next_action TEXT, due_date TEXT);
+CREATE TABLE IF NOT EXISTS medications (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, actor TEXT NOT NULL, name TEXT NOT NULL, form TEXT, strength TEXT, dose_text TEXT, frequency TEXT, prescriber TEXT, verification TEXT NOT NULL, source_note TEXT, document_id TEXT);
+CREATE TABLE IF NOT EXISTS med_status_events (id TEXT PRIMARY KEY, med_id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, status TEXT NOT NULL, evidence TEXT);
+CREATE TABLE IF NOT EXISTS conflicts (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, subject TEXT NOT NULL, item_ids TEXT NOT NULL, description TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS conflict_resolutions (id TEXT PRIMARY KEY, conflict_id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, chosen_id TEXT NOT NULL, evidence TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, filename TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, received_at TEXT NOT NULL, actor TEXT NOT NULL, verification TEXT NOT NULL, note TEXT);
+CREATE TABLE IF NOT EXISTS doc_chunks (doc_id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (doc_id, idx));
+CREATE TABLE IF NOT EXISTS doc_receipts (id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, filename TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, expected_interval_min INTEGER, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS source_status_events (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, at TEXT NOT NULL, ok INTEGER NOT NULL, detail TEXT);
+CREATE TABLE IF NOT EXISTS automation_runs (id TEXT PRIMARY KEY, job TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, ok INTEGER, detail TEXT);
+CREATE TABLE IF NOT EXISTS access_log (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, method TEXT NOT NULL, route TEXT NOT NULL);
+`;
+
+const DEFAULT_SOURCES: [string, string, number | null][] = [
+	["Manual entry (this app)", "manual", null],
+	["Google Calendar", "calendar", 60],
+	["Gmail appointment confirmations", "email", 60],
+	["Google Drive records folder", "drive", 24 * 60],
+	["Hospital records (HHS / CMH)", "records-request", null],
+];
+
+const CHUNK = 1024 * 1024; // DO SQLite rows max 2 MB
+export const MAX_UPLOAD = 20 * 1024 * 1024;
+
+type Row = Record<string, any>;
+class HttpError extends Error {
+	constructor(
+		public status: number,
+		message: string,
+	) {
+		super(message);
+	}
+}
+
+const json = (data: unknown, status = 200) =>
+	new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8" } });
+
+function str(v: unknown, field: string, { required = false, max = 2000 } = {}): string | null {
+	if (v === undefined || v === null || v === "") {
+		if (required) throw new HttpError(400, `${field} is required`);
+		return null;
+	}
+	if (typeof v !== "string") throw new HttpError(400, `${field} must be text`);
+	const s = v.trim();
+	if (s.length > max) throw new HttpError(400, `${field} is too long`);
+	if (required && !s) throw new HttpError(400, `${field} is required`);
+	return s || null;
+}
+
+export class PersonVault extends DurableObject<Env> {
+	sql: SqlStorage;
+
+	constructor(ctx: DurableObjectState, env: Env) {
+		super(ctx, env);
+		this.sql = ctx.storage.sql;
+		this.sql.exec(SCHEMA);
+		const now = new Date().toISOString();
+		for (const [name, kind, interval] of DEFAULT_SOURCES) {
+			this.sql.exec(
+				"INSERT OR IGNORE INTO sources (id, name, kind, expected_interval_min, created_at) VALUES (?, ?, ?, ?, ?)",
+				ulid(),
+				name,
+				kind,
+				interval,
+				now,
+			);
+		}
+	}
+
+	private rows(q: string, ...args: any[]): Row[] {
+		return this.sql.exec(q, ...args).toArray() as Row[];
+	}
+	private one(q: string, ...args: any[]): Row | null {
+		return this.rows(q, ...args)[0] ?? null;
+	}
+	private event(actor: string, type: string, payload: unknown) {
+		this.sql.exec(
+			"INSERT INTO events (id, at, actor, type, payload) VALUES (?, ?, ?, ?, ?)",
+			ulid(),
+			new Date().toISOString(),
+			actor,
+			type,
+			JSON.stringify(payload),
+		);
+	}
+
+	async fetch(request: Request): Promise<Response> {
+		const url = new URL(request.url);
+		const actor = request.headers.get("x-actor") || "unknown";
+		const route = request.headers.get("x-route") || url.pathname;
+		this.sql.exec(
+			"INSERT INTO access_log (id, at, actor, method, route) VALUES (?, ?, ?, ?, ?)",
+			ulid(),
+			new Date().toISOString(),
+			actor,
+			request.method,
+			route.replace(/[0-9A-HJKMNP-TV-Z]{26}/g, ":id"),
+		);
+		try {
+			return await this.route(request, url, actor);
+		} catch (e) {
+			if (e instanceof HttpError) return json({ error: e.message }, e.status);
+			console.error("vault error", (e as Error).name); // no PHI in logs
+			return json({ error: "Internal error" }, 500);
+		}
+	}
+
+	private async body(request: Request): Promise<Row> {
+		try {
+			const b = await request.json();
+			if (!b || typeof b !== "object") throw new Error();
+			return b as Row;
+		} catch {
+			throw new HttpError(400, "Expected a JSON body");
+		}
+	}
+
+	private async route(request: Request, url: URL, actor: string): Promise<Response> {
+		const p = url.pathname.split("/").filter(Boolean);
+		const m = request.method;
+		const is = (method: string, ...segs: string[]) =>
+			m === method && p.length === segs.length && segs.every((s, i) => s === "*" || s === p[i]);
+
+		if (is("GET", "summary")) return json(this.summary());
+		if (is("PUT", "profile")) return json(this.putProfile(await this.body(request), actor), 201);
+		if (is("POST", "log")) return json(this.addLog(await this.body(request), actor), 201);
+		if (is("GET", "observations")) return json(this.rows("SELECT * FROM observations ORDER BY at DESC LIMIT 200"));
+		if (is("POST", "appointments")) return json(this.addAppointment(await this.body(request), actor), 201);
+		if (is("GET", "appointments", "*", "brief")) return json(this.latestBrief(p[1], actor));
+		if (is("POST", "issues")) return json(this.addIssue(await this.body(request), actor), 201);
+		if (is("POST", "issues", "*", "status")) return json(this.issueStatus(p[1], await this.body(request), actor), 201);
+		if (is("GET", "issues", "*")) return json(this.issueDetail(p[1]));
+		if (is("POST", "medications")) return json(this.addMedication(await this.body(request), actor), 201);
+		if (is("POST", "conflicts", "*", "resolve")) return json(this.resolveConflict(p[1], await this.body(request), actor), 201);
+		if (is("POST", "documents")) return json(await this.addDocument(request, url, actor), 201);
+		if (is("GET", "documents", "*", "raw")) return this.rawDocument(p[1]);
+		if (is("POST", "sources", "*", "report")) return json(this.reportSource(p[1], await this.body(request)), 201);
+		if (is("POST", "tick")) return json(this.tick(Date.now()));
+		if (is("GET", "export")) return json(this.exportAll());
+		if (is("POST", "dev", "seed")) return json(await this.seed(await this.body(request), actor), 201);
+		throw new HttpError(404, "Not found");
+	}
+
+	// ---------------- profile ----------------
+	private profile(): Row | null {
+		const r = this.one("SELECT data, at FROM profile_versions ORDER BY at DESC, id DESC LIMIT 1");
+		return r ? { ...JSON.parse(r.data), updated_at: r.at } : null;
+	}
+	private putProfile(b: Row, actor: string) {
+		const birth = str(b.birth_date, "birth_date", { required: true })!;
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(birth)) throw new HttpError(400, "birth_date must be YYYY-MM-DD");
+		const gaW = Number(b.ga_weeks);
+		const gaD = Number(b.ga_days ?? 0);
+		if (!Number.isInteger(gaW) || gaW < 22 || gaW > 44 || !Number.isInteger(gaD) || gaD < 0 || gaD > 6)
+			throw new HttpError(400, "Gestational age at birth must be weeks 22–44 and days 0–6");
+		const data = {
+			display_name: str(b.display_name, "display_name", { required: true, max: 80 }),
+			birth_date: birth,
+			ga_weeks: gaW,
+			ga_days: gaD,
+			label: str(b.label, "label", { max: 40 }), // presentation preference e.g. "Baby A · LEFT"
+			side: b.side === "left" || b.side === "right" ? b.side : null,
+			demo: b.demo === true,
+		};
+		const id = ulid();
+		this.sql.exec("INSERT INTO profile_versions (id, at, actor, data) VALUES (?, ?, ?, ?)", id, new Date().toISOString(), actor, JSON.stringify(data));
+		this.event(actor, "profile.set", { id });
+		return { id, ...data };
+	}
+
+	// ---------------- rapid log ----------------
+	private addLog(b: Row, actor: string, atIso?: string) {
+		const text = str(b.text, "text", { required: true, max: 1000 })!;
+		const parsed = parseRapidLog(text);
+		const redFlags = detectRedFlags(text);
+		const id = ulid();
+		const at = atIso ?? new Date().toISOString();
+		this.sql.exec(
+			"INSERT INTO observations (id, at, actor, text, category, duration_min, volume_ml, tags, red_flags, verification) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PARENT_REPORT')",
+			id,
+			at,
+			actor,
+			text,
+			parsed.category,
+			parsed.durationMin,
+			parsed.volumeMl,
+			JSON.stringify(parsed.tags),
+			JSON.stringify(redFlags),
+		);
+		this.event(actor, "observation.logged", { id });
+		return {
+			id,
+			at,
+			verification: "PARENT_REPORT",
+			parsed,
+			red_flags: redFlags,
+			guidance: redFlags.length ? RED_FLAG_GUIDANCE : null,
+		};
+	}
+
+	// ---------------- appointments & briefs ----------------
+	private addAppointment(b: Row, actor: string) {
+		const local = str(b.starts_local, "starts_local", { required: true })!;
+		let startsAt: string;
+		try {
+			startsAt = torontoLocalToUtcIso(local);
+		} catch {
+			throw new HttpError(400, "starts_local must be YYYY-MM-DDTHH:mm (Toronto time)");
+		}
+		const id = ulid();
+		this.sql.exec(
+			"INSERT INTO appointments (id, created_at, actor, starts_at, title, provider, specialty, location, details_verified, discovered_via, source_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			id,
+			new Date().toISOString(),
+			actor,
+			startsAt,
+			str(b.title, "title", { required: true, max: 200 }),
+			str(b.provider, "provider", { max: 200 }),
+			str(b.specialty, "specialty", { max: 80 }),
+			str(b.location, "location", { max: 200 }),
+			b.details_verified === true ? 1 : 0,
+			str(b.discovered_via, "discovered_via", { max: 40 }) ?? "manual",
+			str(b.source_note, "source_note"),
+		);
+		this.event(actor, "appointment.created", { id });
+		const lead = Date.parse(startsAt) - Date.now();
+		const brief = this.createBrief(id, lead < 7 * 86400000 ? "late-discovery" : "on-create");
+		return { id, starts_at: startsAt, brief_id: brief.id, brief_trigger: brief.trigger };
+	}
+
+	private createBrief(appointmentId: string, trigger: string) {
+		const appt = this.one("SELECT * FROM appointments WHERE id = ?", appointmentId);
+		if (!appt) throw new HttpError(404, "Not found");
+		const content = this.buildBrief(appt);
+		const id = ulid();
+		this.sql.exec(
+			"INSERT INTO briefs (id, appointment_id, created_at, trigger, content) VALUES (?, ?, ?, ?, ?)",
+			id,
+			appointmentId,
+			new Date().toISOString(),
+			trigger,
+			JSON.stringify(content),
+		);
+		this.event("system", "brief.created", { id, appointment_id: appointmentId, trigger });
+		return { id, trigger };
+	}
+
+	private latestBrief(appointmentId: string, actor: string) {
+		const appt = this.one("SELECT id FROM appointments WHERE id = ?", appointmentId);
+		if (!appt) throw new HttpError(404, "Not found");
+		// Always regenerate on view so it reflects the latest record; keep the version.
+		const created = this.createBrief(appointmentId, "viewed");
+		this.event(actor, "brief.viewed", { id: created.id });
+		const r = this.one("SELECT * FROM briefs WHERE id = ?", created.id)!;
+		const history = this.rows("SELECT id, created_at, trigger FROM briefs WHERE appointment_id = ? ORDER BY created_at DESC", appointmentId);
+		return { id: r.id, created_at: r.created_at, trigger: r.trigger, content: JSON.parse(r.content), history };
+	}
+
+	private buildBrief(appt: Row) {
+		const profile = this.profile();
+		const ages = profile ? computeAges(profile.birth_date, profile.ga_weeks, profile.ga_days) : null;
+		const specialty = (appt.specialty || "").toLowerCase();
+		const issues = this.openIssues().filter(
+			(i) => !specialty || !i.specialty || ["gp", "family doctor", "pediatrician", "paediatrician"].includes(specialty) || i.specialty.toLowerCase() === specialty,
+		);
+		const meds = this.medications();
+		const conflicts = this.openConflicts();
+		const since = new Date(Date.now() - 14 * 86400000).toISOString();
+		const obs = this.rows("SELECT * FROM observations WHERE at >= ? ORDER BY at DESC", since);
+		const byCat: Record<string, Row[]> = {};
+		for (const o of obs) (byCat[o.category] ||= []).push(o);
+		const patterns = this.patterns();
+		const sections = [
+			{
+				heading: "Open issues to raise",
+				items: issues.map((i) => ({
+					text: `${i.title} (status: ${i.status.replace("_", " ")}${i.owner ? `; owner: ${i.owner}` : ""}${i.due_date ? `; due ${i.due_date}` : ""})${i.next_action ? ` → Next: ${i.next_action}` : ""}`,
+					verification: i.verification,
+				})),
+			},
+			{
+				heading: "Medications: confirm against the bottle label and prescriber",
+				items: [
+					...meds
+						.filter((m) => m.status !== "historical")
+						.map((m) => ({
+							text: `${m.name}${m.strength ? ` ${m.strength}` : ""}${m.dose_text ? `, ${m.dose_text}` : ""}${m.frequency ? `, ${m.frequency}` : ""}${m.prescriber ? ` (prescriber: ${m.prescriber})` : ""}${m.in_conflict ? " ⚠ CONFLICTING RECORDS" : ""}`,
+							verification: m.in_conflict ? "CONFLICT" : m.status === "verified" ? "CLINICAL_RECORD" : m.verification,
+						})),
+					...conflicts.map((c) => ({ text: `Ask: ${c.description}`, verification: "CONFLICT" })),
+				],
+			},
+			{
+				heading: "Parent observations, last 14 days",
+				items: Object.entries(byCat).map(([cat, list]) => {
+					const durations = list.map((o) => o.duration_min).filter((d) => d != null);
+					const extra = durations.length ? `; durations ${Math.min(...durations)}–${Math.max(...durations)} min` : "";
+					return {
+						text: `${cat}: ${list.length} entr${list.length === 1 ? "y" : "ies"}${extra}. Latest: "${list[0].text}"`,
+						verification: "PARENT_REPORT",
+					};
+				}),
+			},
+			{
+				heading: "Patterns the system noticed (not clinical findings)",
+				items: patterns.map((p) => ({ text: p, verification: "AI_INFERENCE" })),
+			},
+			{
+				heading: "Questions to ask",
+				items: [
+					...issues.filter((i) => i.next_action).map((i) => ({ text: `${i.title}: ${i.next_action}`, verification: "PARENT_REPORT" })),
+					...conflicts.map((c) => ({ text: `Which record is current? ${c.subject}`, verification: "CONFLICT" })),
+					{ text: "Can we get copies of today's notes, orders and any referral letters?", verification: "PARENT_REPORT" },
+				],
+			},
+		];
+		return {
+			child: profile?.display_name ?? null,
+			label: profile?.label ?? null,
+			ages,
+			appointment: {
+				title: appt.title,
+				when: formatToronto(appt.starts_at),
+				provider: appt.provider,
+				specialty: appt.specialty,
+				location: appt.location,
+				details_verified: !!appt.details_verified,
+			},
+			sections,
+			disclaimer:
+				"Prepared by FamilyOS from the family's own records. It is not medical advice and does not replace the clinician's judgement. Items are labelled by source.",
+		};
+	}
+
+	// ---------------- issues ----------------
+	private addIssue(b: Row, actor: string) {
+		const id = ulid();
+		const verification = VERIFICATION.includes(b.verification) ? b.verification : "PARENT_REPORT";
+		this.sql.exec(
+			"INSERT INTO issues (id, created_at, actor, title, specialty, owner, first_reported, source_note, verification) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			id,
+			new Date().toISOString(),
+			actor,
+			str(b.title, "title", { required: true, max: 200 }),
+			str(b.specialty, "specialty", { max: 80 }),
+			str(b.owner, "owner", { max: 200 }),
+			str(b.first_reported, "first_reported", { max: 10 }) ?? new Date().toISOString().slice(0, 10),
+			str(b.source_note, "source_note"),
+			verification,
+		);
+		this.insertIssueStatus(id, actor, (ISSUE_STATUSES as readonly string[]).includes(b.status) && !EVIDENCE_REQUIRED.includes(b.status) ? b.status : "raised", null, str(b.next_action, "next_action", { max: 500 }), str(b.due_date, "due_date", { max: 10 }));
+		this.event(actor, "issue.created", { id });
+		return { id };
+	}
+	private insertIssueStatus(issueId: string, actor: string, status: string, evidence: string | null, next: string | null, due: string | null) {
+		this.sql.exec(
+			"INSERT INTO issue_status_events (id, issue_id, at, actor, status, evidence, next_action, due_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			ulid(),
+			issueId,
+			new Date().toISOString(),
+			actor,
+			status,
+			evidence,
+			next,
+			due,
+		);
+	}
+	private issueStatus(issueId: string, b: Row, actor: string) {
+		if (!this.one("SELECT id FROM issues WHERE id = ?", issueId)) throw new HttpError(404, "Not found");
+		const status = b.status as IssueStatus;
+		if (!(ISSUE_STATUSES as readonly string[]).includes(status)) throw new HttpError(400, "Unknown status");
+		const evidence = str(b.evidence, "evidence", { max: 2000 });
+		if (EVIDENCE_REQUIRED.includes(status) && !evidence)
+			throw new HttpError(422, `Moving to "${status.replace("_", " ")}" needs evidence: who confirmed it, when, and how (e.g. "Clinic called 3 Nov, referral received").`);
+		const cur = this.currentIssueStatus(issueId);
+		this.insertIssueStatus(
+			issueId,
+			actor,
+			status,
+			evidence,
+			str(b.next_action, "next_action", { max: 500 }) ?? cur?.next_action ?? null,
+			str(b.due_date, "due_date", { max: 10 }) ?? cur?.due_date ?? null,
+		);
+		this.event(actor, "issue.status", { id: issueId, status });
+		return this.issueDetail(issueId);
+	}
+	private currentIssueStatus(issueId: string) {
+		return this.one("SELECT * FROM issue_status_events WHERE issue_id = ? ORDER BY at DESC, id DESC LIMIT 1", issueId);
+	}
+	private issueDetail(issueId: string): Row {
+		const issue = this.one("SELECT * FROM issues WHERE id = ?", issueId);
+		if (!issue) throw new HttpError(404, "Not found");
+		const history = this.rows("SELECT at, actor, status, evidence, next_action, due_date FROM issue_status_events WHERE issue_id = ? ORDER BY at, id", issueId);
+		const cur = history[history.length - 1];
+		return { ...issue, status: cur.status, next_action: cur.next_action, due_date: cur.due_date, history };
+	}
+	private allIssues() {
+		return this.rows("SELECT id FROM issues ORDER BY created_at").map((r) => this.issueDetail(r.id));
+	}
+	private openIssues(): Row[] {
+		const today = new Date().toISOString().slice(0, 10);
+		return this.allIssues()
+			.filter((i) => i.status !== "closed")
+			.map((i): Row => ({ ...i, overdue: !!i.due_date && i.due_date < today }))
+			.sort((a, b) => (a.due_date || "9999").localeCompare(b.due_date || "9999"));
+	}
+
+	// ---------------- medications & conflicts ----------------
+	private addMedication(b: Row, actor: string) {
+		const id = ulid();
+		const name = str(b.name, "name", { required: true, max: 120 })!;
+		const strength = str(b.strength, "strength", { max: 60 });
+		const verification = VERIFICATION.includes(b.verification) ? b.verification : "PARENT_REPORT";
+		this.sql.exec(
+			"INSERT INTO medications (id, created_at, actor, name, form, strength, dose_text, frequency, prescriber, verification, source_note, document_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			id,
+			new Date().toISOString(),
+			actor,
+			name,
+			str(b.form, "form", { max: 60 }),
+			strength,
+			str(b.dose_text, "dose_text", { max: 200 }),
+			str(b.frequency, "frequency", { max: 100 }),
+			str(b.prescriber, "prescriber", { max: 120 }),
+			verification,
+			str(b.source_note, "source_note"),
+			str(b.document_id, "document_id", { max: 40 }),
+		);
+		this.event(actor, "medication.recorded", { id });
+		// Same medication recorded with a different strength or dose -> CONFLICT. Never pick one automatically.
+		const others = this.medications().filter(
+			(m) => m.id !== id && m.status !== "historical" && m.name.toLowerCase() === name.toLowerCase(),
+		);
+		const mine = this.one("SELECT * FROM medications WHERE id = ?", id)!;
+		const differing = others.filter((o) => (o.strength || "") !== (mine.strength || "") || (o.dose_text || "") !== (mine.dose_text || ""));
+		let conflictId: string | null = null;
+		if (differing.length) {
+			conflictId = ulid();
+			const desc = [mine, ...differing]
+				.map((m) => `${m.strength || "?"}${m.dose_text ? `, ${m.dose_text}` : ""} (${m.verification}${m.source_note ? `: ${m.source_note}` : ""})`)
+				.join(" vs ");
+			this.sql.exec(
+				"INSERT INTO conflicts (id, created_at, subject, item_ids, description) VALUES (?, ?, ?, ?, ?)",
+				conflictId,
+				new Date().toISOString(),
+				`${name}: records disagree`,
+				JSON.stringify([id, ...differing.map((d) => d.id)]),
+				`${name} records disagree: ${desc}. Check the current bottle label and confirm with the prescriber. Do not calculate a dose from these records.`,
+			);
+			this.event("system", "conflict.detected", { id: conflictId });
+		}
+		return { id, conflict_id: conflictId };
+	}
+	private resolveConflict(conflictId: string, b: Row, actor: string) {
+		const c = this.one("SELECT * FROM conflicts WHERE id = ?", conflictId);
+		if (!c) throw new HttpError(404, "Not found");
+		if (this.one("SELECT id FROM conflict_resolutions WHERE conflict_id = ?", conflictId)) throw new HttpError(409, "Already resolved");
+		const items: string[] = JSON.parse(c.item_ids);
+		const chosen = str(b.chosen_id, "chosen_id", { required: true })!;
+		if (!items.includes(chosen)) throw new HttpError(400, "chosen_id must be one of the conflicting records");
+		const evidence = str(b.evidence, "evidence", { required: true })!;
+		const at = new Date().toISOString();
+		this.sql.exec("INSERT INTO conflict_resolutions (id, conflict_id, at, actor, chosen_id, evidence) VALUES (?, ?, ?, ?, ?, ?)", ulid(), conflictId, at, actor, chosen, evidence);
+		for (const it of items) {
+			this.sql.exec(
+				"INSERT INTO med_status_events (id, med_id, at, actor, status, evidence) VALUES (?, ?, ?, ?, ?, ?)",
+				ulid(),
+				it,
+				at,
+				actor,
+				it === chosen ? "verified" : "historical",
+				evidence,
+			);
+		}
+		this.event(actor, "conflict.resolved", { id: conflictId });
+		return { ok: true };
+	}
+	private openConflicts(): Row[] {
+		return this.rows(
+			"SELECT * FROM conflicts WHERE id NOT IN (SELECT conflict_id FROM conflict_resolutions) ORDER BY created_at DESC",
+		).map((c): Row => ({ ...c, item_ids: JSON.parse(c.item_ids) }));
+	}
+	private medications(): Row[] {
+		const open = this.openConflicts();
+		const inConflict = new Set(open.flatMap((c) => c.item_ids));
+		return this.rows("SELECT * FROM medications ORDER BY created_at").map((m): Row => {
+			const st = this.one("SELECT status, evidence, at FROM med_status_events WHERE med_id = ? ORDER BY at DESC, id DESC LIMIT 1", m.id);
+			return { ...m, status: st?.status ?? "unverified", status_evidence: st?.evidence ?? null, in_conflict: inConflict.has(m.id) };
+		});
+	}
+
+	// ---------------- documents ----------------
+	private async addDocument(request: Request, url: URL, actor: string) {
+		const filename = (url.searchParams.get("filename") || "upload").replace(/[^\w.\- ()]/g, "_").slice(0, 200);
+		const declared = request.headers.get("content-type") || "application/octet-stream";
+		const verification = VERIFICATION.includes(url.searchParams.get("verification") as any)
+			? url.searchParams.get("verification")!
+			: "EXTRACTED";
+		const note = (url.searchParams.get("note") || "").slice(0, 500) || null;
+		const buf = new Uint8Array(await request.arrayBuffer()) as Uint8Array<ArrayBuffer>;
+		if (!buf.length) throw new HttpError(400, "Empty file");
+		if (buf.length > MAX_UPLOAD) throw new HttpError(413, "File is larger than 20 MB");
+		const mime = sniffMime(buf, declared);
+		if (!mime) throw new HttpError(415, "This file type isn't accepted (PDF, images, text, Word documents only)");
+		const hash = await sha256Hex(buf);
+		const at = new Date().toISOString();
+		const existing = this.one("SELECT * FROM documents WHERE sha256 = ?", hash);
+		let docId: string;
+		let duplicate = false;
+		if (existing) {
+			docId = existing.id;
+			duplicate = true;
+		} else {
+			docId = ulid();
+			this.ctx.storage.transactionSync(() => {
+				this.sql.exec(
+					"INSERT INTO documents (id, sha256, filename, mime, size, received_at, actor, verification, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					docId,
+					hash,
+					filename,
+					mime,
+					buf.length,
+					at,
+					actor,
+					verification,
+					note,
+				);
+				for (let i = 0, idx = 0; i < buf.length; i += CHUNK, idx++) {
+					this.sql.exec("INSERT INTO doc_chunks (doc_id, idx, data) VALUES (?, ?, ?)", docId, idx, buf.slice(i, i + CHUNK).buffer);
+				}
+			});
+		}
+		this.sql.exec("INSERT INTO doc_receipts (id, doc_id, at, actor, filename) VALUES (?, ?, ?, ?, ?)", ulid(), docId, at, actor, filename);
+		this.event(actor, duplicate ? "document.duplicate_received" : "document.stored", { id: docId, sha256: hash });
+		return { id: docId, sha256: hash, duplicate, mime, size: buf.length };
+	}
+	private rawDocument(docId: string): Response {
+		const d = this.one("SELECT * FROM documents WHERE id = ?", docId);
+		if (!d) throw new HttpError(404, "Not found");
+		const chunks = this.rows("SELECT data FROM doc_chunks WHERE doc_id = ? ORDER BY idx", docId);
+		const out = new Uint8Array(d.size);
+		let off = 0;
+		for (const c of chunks) {
+			const u = new Uint8Array(c.data as ArrayBuffer);
+			out.set(u, off);
+			off += u.length;
+		}
+		return new Response(out, {
+			headers: {
+				"content-type": d.mime,
+				"content-disposition": `attachment; filename="${d.filename.replace(/"/g, "")}"`,
+				"x-content-sha256": d.sha256,
+			},
+		});
+	}
+
+	// ---------------- sources & automation ----------------
+	private reportSource(sourceId: string, b: Row) {
+		if (!this.one("SELECT id FROM sources WHERE id = ?", sourceId)) throw new HttpError(404, "Not found");
+		this.sql.exec(
+			"INSERT INTO source_status_events (id, source_id, at, ok, detail) VALUES (?, ?, ?, ?, ?)",
+			ulid(),
+			sourceId,
+			new Date().toISOString(),
+			b.ok === true ? 1 : 0,
+			str(b.detail, "detail", { max: 300 }),
+		);
+		return { ok: true };
+	}
+	private sources(nowMs = Date.now()) {
+		return this.rows("SELECT * FROM sources ORDER BY created_at, name").map((s) => {
+			if (s.kind === "manual") return { ...s, status: "CONNECTED", last_success_at: null, detail: "Always available" };
+			const last = this.one("SELECT * FROM source_status_events WHERE source_id = ? ORDER BY at DESC LIMIT 1", s.id);
+			const lastOk = this.one("SELECT at FROM source_status_events WHERE source_id = ? AND ok = 1 ORDER BY at DESC LIMIT 1", s.id);
+			let status = "NOT CONNECTED";
+			let detail = "No connector has reported yet. Nothing from this source is being picked up automatically.";
+			if (last) {
+				const stale = s.expected_interval_min && lastOk && nowMs - Date.parse(lastOk.at) > 2 * s.expected_interval_min * 60000;
+				if (!last.ok || !lastOk || stale) {
+					status = "DEGRADED";
+					detail = last.ok ? "No successful sync recently" : last.detail || "Last sync failed";
+				} else {
+					status = "CONNECTED";
+					detail = "Syncing normally";
+				}
+			}
+			return { ...s, status, last_success_at: lastOk?.at ?? null, detail };
+		});
+	}
+	/** Scheduled work for this person. Called by the Worker's cron handler. */
+	tick(nowMs: number) {
+		const runId = ulid();
+		const started = new Date(nowMs).toISOString();
+		this.sql.exec("INSERT INTO automation_runs (id, job, started_at) VALUES (?, 'scheduled-tick', ?)", runId, started);
+		const created: string[] = [];
+		try {
+			const upcoming = this.rows("SELECT * FROM appointments WHERE starts_at > ?", started);
+			for (const a of upcoming) {
+				const lead = Date.parse(a.starts_at) - nowMs;
+				for (const [trigger, ms] of [
+					["T-7d", 7 * 86400000],
+					["T-48h", 48 * 3600000],
+					["T-12h", 12 * 3600000],
+				] as const) {
+					if (lead <= ms && !this.one("SELECT id FROM briefs WHERE appointment_id = ? AND trigger = ?", a.id, trigger)) {
+						this.createBrief(a.id, trigger);
+						created.push(trigger);
+					}
+				}
+			}
+			const overdue = this.openIssues().filter((i) => i.overdue).length;
+			const degraded = this.sources(nowMs).filter((s) => s.status !== "CONNECTED").length;
+			const detail = JSON.stringify({ briefs_created: created, overdue_issues: overdue, sources_not_connected: degraded });
+			this.sql.exec("INSERT INTO automation_runs (id, job, started_at, finished_at, ok, detail) VALUES (?, 'scheduled-tick:done', ?, ?, 1, ?)", ulid(), started, new Date().toISOString(), detail);
+			return { ok: true, briefs_created: created, overdue_issues: overdue };
+		} catch (e) {
+			this.sql.exec("INSERT INTO automation_runs (id, job, started_at, finished_at, ok, detail) VALUES (?, 'scheduled-tick:done', ?, ?, 0, ?)", ulid(), started, new Date().toISOString(), (e as Error).name);
+			throw e;
+		}
+	}
+
+	// ---------------- patterns (rules, labelled AI_INFERENCE) ----------------
+	private patterns(): string[] {
+		const out: string[] = [];
+		const week = new Date(Date.now() - 7 * 86400000).toISOString();
+		const longFeeds = this.one("SELECT COUNT(*) AS n FROM observations WHERE category = 'feed' AND duration_min >= 40 AND at >= ?", week)!.n;
+		if (longFeeds >= 3) out.push(`Feeds of 40+ minutes were logged ${longFeeds} times in the last 7 days. Consider raising feeding duration at the next visit.`);
+		const regurg = this.rows("SELECT tags FROM observations WHERE at >= ?", week).filter((r) => JSON.parse(r.tags).some((t: string) => t.includes("regurg") || t === "choking")).length;
+		if (regurg >= 3) out.push(`Regurgitation or choking was mentioned ${regurg} times in the last 7 days.`);
+		const flagged = this.one("SELECT COUNT(*) AS n FROM observations WHERE red_flags != '[]' AND at >= ?", week)!.n;
+		if (flagged) out.push(`${flagged} log entr${flagged === 1 ? "y" : "ies"} in the last 7 days matched an urgent-symptom phrase. Make sure a clinician knows.`);
+		const overdue = this.openIssues().filter((i) => i.overdue).length;
+		if (overdue) out.push(`${overdue} open issue${overdue === 1 ? " is" : "s are"} past due.`);
+		return out;
+	}
+
+	// ---------------- summary / export ----------------
+	private summary() {
+		const profile = this.profile();
+		const now = new Date().toISOString();
+		const next = this.one("SELECT * FROM appointments WHERE starts_at > ? ORDER BY starts_at LIMIT 1", now);
+		const lastRun = this.one("SELECT * FROM automation_runs WHERE job = 'scheduled-tick:done' ORDER BY started_at DESC LIMIT 1");
+		const docs = this.rows("SELECT id, filename, mime, size, received_at, verification, note, sha256 FROM documents ORDER BY received_at DESC");
+		return {
+			generated_at: now,
+			profile,
+			ages: profile ? computeAges(profile.birth_date, profile.ga_weeks, profile.ga_days) : null,
+			next_appointment: next ? { ...next, when: formatToronto(next.starts_at) } : null,
+			appointments: this.rows("SELECT * FROM appointments ORDER BY starts_at DESC LIMIT 50").map((a) => ({ ...a, when: formatToronto(a.starts_at) })),
+			issues: this.openIssues(),
+			closed_issues: this.allIssues().filter((i) => i.status === "closed").length,
+			medications: this.medications(),
+			conflicts: this.openConflicts(),
+			observations: this.rows("SELECT * FROM observations ORDER BY at DESC LIMIT 30").map((o) => ({ ...o, tags: JSON.parse(o.tags), red_flags: JSON.parse(o.red_flags), when: formatToronto(o.at) })),
+			patterns: this.patterns(),
+			documents: docs,
+			sources: this.sources(),
+			last_automation_run: lastRun,
+			red_flag_guidance: RED_FLAG_GUIDANCE,
+		};
+	}
+	private exportAll() {
+		const tables = ["events", "profile_versions", "observations", "appointments", "briefs", "issues", "issue_status_events", "medications", "med_status_events", "conflicts", "conflict_resolutions", "documents", "doc_receipts", "sources", "source_status_events", "automation_runs"];
+		const out: Record<string, Row[]> = {};
+		for (const t of tables) out[t] = this.rows(`SELECT * FROM ${t}`);
+		return { exported_at: new Date().toISOString(), format: "familyos-person-export/v1", note: "Document bytes are downloadable individually via /api/documents/:id/raw", tables: out };
+	}
+
+	// ---------------- dev seed (synthetic only) ----------------
+	private async seed(b: Row, actor: string) {
+		if (this.profile()) return { seeded: false, reason: "already has data" };
+		const f = b as any;
+		this.putProfile({ ...f.profile, demo: true }, actor);
+		for (const m of f.medications ?? []) this.addMedication(m, actor);
+		for (const i of f.issues ?? []) this.addIssue(i, actor);
+		const now = Date.now();
+		for (const [idx, l] of (f.logs ?? []).entries()) this.addLog({ text: l }, actor, new Date(now - (idx + 1) * 5 * 3600000).toISOString());
+		for (const a of f.appointments ?? []) this.addAppointment(a, actor);
+		const cal = this.one("SELECT id FROM sources WHERE kind = 'calendar'");
+		if (cal && f.calendar_failing) this.reportSource(cal.id, { ok: false, detail: "Calendar access was revoked (demo)" });
+		return { seeded: true };
+	}
+}

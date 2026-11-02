@@ -1,0 +1,35 @@
+/**
+ * FamilyOS Worker: CallumOS + FinnleyOS.
+ * Not public: workers.dev and preview URLs are disabled, so the custom domains
+ * (behind Cloudflare Access) are the only way in. See docs/STATUS.md.
+ */
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "familyos",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-10-08",
+	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": false,
+	"preview_urls": false,
+	"routes": [
+		{ "pattern": "callum.libbyhd.org", "custom_domain": true },
+		{ "pattern": "finnley.libbyhd.org", "custom_domain": true }
+	],
+	"assets": {
+		"binding": "ASSETS",
+		"directory": "./public",
+		"run_worker_first": true
+	},
+	"durable_objects": {
+		"bindings": [{ "name": "PERSON_VAULT", "class_name": "PersonVault" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["PersonVault"] }],
+	"triggers": { "crons": ["*/30 * * * *"] },
+	"vars": {
+		"HOST_PERSON_MAP": "{\"callum.libbyhd.org\":\"callum\",\"finnley.libbyhd.org\":\"finnley\"}",
+		"APP_VERSION": "0.1.0"
+		// ACCESS_TEAM_DOMAIN, ACCESS_AUD and ALLOWED_EMAILS are set as secrets/vars at deploy time.
+		// Until they are set, every request is refused (fail closed).
+	},
+	"observability": { "enabled": true }
+}
