@@ -141,7 +141,7 @@ function renderSetup() {
 function render() {
 	document.querySelectorAll("[data-panel]").forEach((p) => (p.hidden = p.dataset.panel !== tab));
 	document.querySelectorAll(".tabs button").forEach((b) => (b.dataset.tab === tab ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
-	({ today: renderToday, issues: renderIssues, record: renderRecord, sources: renderSources })[tab]();
+	({ today: renderToday, issues: renderIssues, record: renderRecord, letters: renderLetters, sources: renderSources })[tab]();
 }
 document.querySelectorAll(".tabs button").forEach((b) =>
 	b.addEventListener("click", () => {
@@ -193,7 +193,7 @@ function renderToday() {
 	<div class="card"><h2>Medications</h2><ul class="list">${s.medications.filter((m) => m.status !== "historical").map(medLine).join("") || `<li class="muted">None recorded.</li>`}</ul>
 		<p class="small muted">Always follow the current bottle label and prescriber. This app never calculates doses.</p></div>
 	<div class="card"><h2>Recent log</h2><ul class="list">${
-		s.observations.slice(0, 8).map((o) => `<li><div class="row between"><span class="badge">${esc(o.category)}</span><span class="small muted">${esc(o.when)}</span></div><div>${esc(o.text)}</div>${o.red_flags.length ? `<div class="small"><span class="badge v-CONFLICT">Urgent phrase: ${esc(o.red_flags.join(", "))}</span></div>` : ""}</li>`).join("") || `<li class="muted">Nothing logged yet.</li>`
+		s.observations.slice(0, 8).map((o) => `<li><div class="row between"><span class="badge">${esc(o.category)}</span><span class="small muted">${esc(o.when)}</span></div><div>${esc(o.text)}</div>${o.red_flags.length ? `<div class="small"><span class="badge v-CONFLICT">Urgent phrase: ${esc(o.red_flags.join(", "))}</span></div>` : ""}${o.category === "milestone" ? `<div class="small muted">Goes in his monthly letter</div>` : s.keepsake.kept_ids.includes(o.id) ? `<div class="small muted">♥ Kept for him</div>` : `<button class="ghost small" data-keep="${esc(o.id)}">♥ Keep this for him</button>`}</li>`).join("") || `<li class="muted">Nothing logged yet.</li>`
 	}</ul></div>`;
 
 	const form = $("#log-form");
@@ -225,6 +225,72 @@ function renderToday() {
 		});
 	}
 	bindBriefButtons(el);
+	el.querySelectorAll("[data-keep]").forEach((b) =>
+		b.addEventListener("click", async () => {
+			try { await post("/keep", { item_type: "observation", item_id: b.dataset.keep }); toast("Kept. It will be in his letter for that month."); await load(); } catch (err) { toast(err.message); }
+		}),
+	);
+}
+
+// ---------- Letters (his own story, separate from the medical record) ----------
+const DELIVERY = {
+	SENT: ["s-CONNECTED", "Sent"],
+	NOT_SENT_DELIVERY_NOT_CONNECTED: ["s-NOT-CONNECTED", "Saved · not emailed yet (sending not connected)"],
+	NOT_SENT_NO_ADDRESS: ["s-NOT-CONNECTED", "Saved · no email address set"],
+	FAILED: ["s-DEGRADED", "Email failed"],
+};
+function renderLetters() {
+	const k = state.keepsake;
+	const name = state.profile.display_name;
+	const el = $('[data-panel="letters"]');
+	el.innerHTML = `
+	<div class="card"><h2>Write to ${esc(name)}</h2>
+		<p class="small muted">For him to read when he's older. Your words go into his letter for this month, exactly as you write them.</p>
+		<form id="letter-form">
+			<div class="grid2"><div><label for="l-sign">Signed</label><input id="l-sign" name="signed_as" required placeholder="Dad, Mom…"></div>
+			<div><label for="l-title">Title (optional)</label><input id="l-title" name="title"></div></div>
+			<label for="l-body">Letter</label><textarea id="l-body" name="body" required rows="8"></textarea>
+			<div class="row"><button type="submit">Save letter</button><button type="button" class="ghost" id="l-dictate" hidden>🎤 Speak</button></div>
+		</form>
+	</div>
+	<div class="card"><h2>His monthly letters</h2>
+		<p class="small muted">On the 1st of each month, FamilyOS writes last month's letter from your letters, his firsts and the moments you kept. Medical details are left out unless you keep them on purpose.</p>
+		<ul class="list">${k.keepsakes.map((x) => {
+			const d = DELIVERY[x.delivery?.status] || ["", x.delivery?.status || "Saved"];
+			return `<li><div class="row between"><strong>${esc(x.label)}</strong><span class="badge ${d[0]}">${esc(d[1])}</span></div>
+				<div class="small muted">${x.counts.letters} letter(s) · ${x.counts.milestones} first(s) · ${x.counts.kept} kept moment(s) · made ${esc(new Date(x.created_at).toLocaleDateString())}</div>
+				<a class="btn ghost" href="/api/keepsakes/${esc(x.id)}" target="_blank" rel="noopener">Read</a></li>`;
+		}).join("") || `<li class="muted">The first one will be written on the 1st of next month.</li>`}</ul>
+		<button class="ghost" id="k-now">Make this month's letter now (preview)</button>
+	</div>
+	<div class="card"><h2>Letters written so far</h2><ul class="list">${k.letters.map((l) => `<li><strong>${esc(l.title || "Letter")}</strong> <span class="small muted">— ${esc(l.signed_as)}, ${esc(new Date(l.at).toLocaleDateString())}</span><div class="small">${esc(l.body.slice(0, 160))}${l.body.length > 160 ? "…" : ""}</div></li>`).join("") || `<li class="muted">None yet.</li>`}</ul></div>
+	<div class="card"><h2>Send his letters to</h2>
+		<form id="k-email" class="row"><input type="email" name="email" aria-label="His email address" value="${esc(k.email || "")}" placeholder="his email address"><button type="submit">Save</button></form>
+		<p class="small muted">Every letter is also kept here permanently and in the full export, even if email fails.</p>
+	</div>`;
+	$("#letter-form").addEventListener("submit", async (e) => {
+		e.preventDefault();
+		try { await post("/letters", Object.fromEntries(new FormData(e.target))); toast("Letter saved for him."); await load(); } catch (err) { toast(err.message); }
+	});
+	$("#k-email").addEventListener("submit", async (e) => {
+		e.preventDefault();
+		try { await api("/settings/keepsake-email", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(e.target))) }); toast("Saved."); await load(); } catch (err) { toast(err.message); }
+	});
+	$("#k-now").addEventListener("click", async () => {
+		try { await post("/keepsakes/compile", {}); toast("This month's letter so far has been saved."); await load(); } catch (err) { toast(err.message); }
+	});
+	const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+	if (SR) {
+		const d = $("#l-dictate");
+		d.hidden = false;
+		d.addEventListener("click", () => {
+			const r = new SR();
+			r.lang = "en-CA";
+			r.continuous = true;
+			r.onresult = (ev) => ($("#l-body").value += (($("#l-body").value ? " " : "") + [...ev.results].slice(ev.resultIndex).map((x) => x[0].transcript).join(" ")));
+			r.start();
+		});
+	}
 }
 
 // ---------- Brief ----------

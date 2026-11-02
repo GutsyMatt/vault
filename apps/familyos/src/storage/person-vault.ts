@@ -8,7 +8,8 @@
  * resolutions are new rows.
  */
 import { DurableObject } from "cloudflare:workers";
-import { formatToronto, sha256Hex, sniffMime, torontoLocalToUtcIso, ulid } from "../core/util";
+import { formatToronto, sha256Hex, sniffMime, torontoDate, torontoLocalToUtcIso, ulid } from "../core/util";
+import { buildKeepsake, periodLabel, previousPeriod } from "../family/keepsake";
 import {
 	EVIDENCE_REQUIRED,
 	ISSUE_STATUSES,
@@ -39,6 +40,11 @@ CREATE TABLE IF NOT EXISTS doc_receipts (id TEXT PRIMARY KEY, doc_id TEXT NOT NU
 CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, expected_interval_min INTEGER, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS source_status_events (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, at TEXT NOT NULL, ok INTEGER NOT NULL, detail TEXT);
 CREATE TABLE IF NOT EXISTS automation_runs (id TEXT PRIMARY KEY, job TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, ok INTEGER, detail TEXT);
+CREATE TABLE IF NOT EXISTS letters (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, signed_as TEXT NOT NULL, title TEXT, body TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS keepsake_marks (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, item_type TEXT NOT NULL, item_id TEXT NOT NULL, note TEXT);
+CREATE TABLE IF NOT EXISTS keepsakes (id TEXT PRIMARY KEY, period TEXT NOT NULL, created_at TEXT NOT NULL, trigger TEXT NOT NULL, subject TEXT NOT NULL, text TEXT NOT NULL, html TEXT NOT NULL, counts TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS keepsake_deliveries (id TEXT PRIMARY KEY, keepsake_id TEXT NOT NULL, at TEXT NOT NULL, status TEXT NOT NULL, detail TEXT);
+CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, key TEXT NOT NULL, value TEXT);
 CREATE TABLE IF NOT EXISTS access_log (id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, method TEXT NOT NULL, route TEXT NOT NULL);
 `;
 
@@ -170,6 +176,11 @@ export class PersonVault extends DurableObject<Env> {
 		if (is("POST", "sources", "*", "report")) return json(this.reportSource(p[1], await this.body(request)), 201);
 		if (is("POST", "tick")) return json(this.tick(Date.now()));
 		if (is("GET", "export")) return json(this.exportAll());
+		if (is("POST", "letters")) return json(this.addLetter(await this.body(request), actor), 201);
+		if (is("POST", "keep")) return json(this.keep(await this.body(request), actor), 201);
+		if (is("PUT", "settings", "keepsake-email")) return json(this.setKeepsakeEmail(await this.body(request), actor), 201);
+		if (is("POST", "keepsakes", "compile")) return json(this.compileKeepsake((await this.body(request)).period, "requested-by-parent", Date.now()), 201);
+		if (is("GET", "keepsakes", "*")) return this.keepsakeHtml(p[1]);
 		throw new HttpError(404, "Not found");
 	}
 
@@ -639,11 +650,20 @@ export class PersonVault extends DurableObject<Env> {
 					}
 				}
 			}
+			// Monthly letter: on the 1st (Toronto), write last month's letter once.
+			let keepsake: string | null = null;
+			const today = torontoDate(nowMs);
+			if (today.endsWith("-01") && this.profile()) {
+				const period = previousPeriod(today);
+				if (!this.one("SELECT id FROM keepsakes WHERE period = ? AND trigger = 'monthly'", period)) {
+					keepsake = this.compileKeepsake(period, "monthly", nowMs).id;
+				}
+			}
 			const overdue = this.openIssues().filter((i) => i.overdue).length;
 			const degraded = this.sources(nowMs).filter((s) => s.status !== "CONNECTED").length;
-			const detail = JSON.stringify({ briefs_created: created, overdue_issues: overdue, sources_not_connected: degraded });
+			const detail = JSON.stringify({ briefs_created: created, overdue_issues: overdue, sources_not_connected: degraded, keepsake_created: !!keepsake });
 			this.sql.exec("INSERT INTO automation_runs (id, job, started_at, finished_at, ok, detail) VALUES (?, 'scheduled-tick:done', ?, ?, 1, ?)", ulid(), started, new Date().toISOString(), detail);
-			return { ok: true, briefs_created: created, overdue_issues: overdue };
+			return { ok: true, briefs_created: created, overdue_issues: overdue, keepsake };
 		} catch (e) {
 			this.sql.exec("INSERT INTO automation_runs (id, job, started_at, finished_at, ok, detail) VALUES (?, 'scheduled-tick:done', ?, ?, 0, ?)", ulid(), started, new Date().toISOString(), (e as Error).name);
 			throw e;
@@ -663,6 +683,117 @@ export class PersonVault extends DurableObject<Env> {
 		const overdue = this.openIssues().filter((i) => i.overdue).length;
 		if (overdue) out.push(`${overdue} open issue${overdue === 1 ? " is" : "s are"} past due.`);
 		return out;
+	}
+
+	// ---------------- keepsake letters (his own story, separate from the medical record) ----------------
+	private setting(key: string): string | null {
+		return this.one("SELECT value FROM settings WHERE key = ? ORDER BY at DESC, id DESC LIMIT 1", key)?.value ?? null;
+	}
+	private setKeepsakeEmail(b: Row, actor: string) {
+		const v = str(b.email, "email", { max: 200 });
+		if (v && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) throw new HttpError(400, "That doesn't look like an email address");
+		this.sql.exec("INSERT INTO settings (id, at, actor, key, value) VALUES (?, ?, ?, 'keepsake_email', ?)", ulid(), new Date().toISOString(), actor, v ? v.toLowerCase() : null);
+		this.event(actor, "settings.keepsake_email", {});
+		return { ok: true };
+	}
+	private addLetter(b: Row, actor: string) {
+		const id = ulid();
+		this.sql.exec(
+			"INSERT INTO letters (id, at, actor, signed_as, title, body) VALUES (?, ?, ?, ?, ?, ?)",
+			id,
+			new Date().toISOString(),
+			actor,
+			str(b.signed_as, "signed_as", { required: true, max: 60 }),
+			str(b.title, "title", { max: 200 }),
+			str(b.body, "body", { required: true, max: 20000 }),
+		);
+		this.event(actor, "letter.written", { id });
+		return { id };
+	}
+	private keep(b: Row, actor: string) {
+		const type = b.item_type === "document" ? "document" : "observation";
+		const itemId = str(b.item_id, "item_id", { required: true, max: 40 })!;
+		const table = type === "document" ? "documents" : "observations";
+		if (!this.one(`SELECT id FROM ${table} WHERE id = ?`, itemId)) throw new HttpError(404, "Not found");
+		if (this.one("SELECT id FROM keepsake_marks WHERE item_type = ? AND item_id = ?", type, itemId)) return { ok: true, already: true };
+		this.sql.exec("INSERT INTO keepsake_marks (id, at, actor, item_type, item_id, note) VALUES (?, ?, ?, ?, ?, ?)", ulid(), new Date().toISOString(), actor, type, itemId, str(b.note, "note", { max: 500 }));
+		this.event(actor, "keepsake.marked", { item_type: type });
+		return { ok: true };
+	}
+	/** Build (or rebuild as a new version) the letter for one month. Previous versions are kept. */
+	compileKeepsake(periodIn: unknown, trigger: string, nowMs: number) {
+		const period = typeof periodIn === "string" && /^\d{4}-\d{2}$/.test(periodIn) ? periodIn : torontoDate(nowMs).slice(0, 7);
+		const profile = this.profile();
+		if (!profile) throw new HttpError(409, "Set up this record first");
+		const [y, m] = period.split("-").map(Number);
+		// Month boundaries in UTC are close enough for grouping; display dates use Toronto time.
+		const from = new Date(Date.UTC(y, m - 1, 1, 5)).toISOString();
+		const to = new Date(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1, 5)).toISOString();
+		const day = (iso: string) => torontoDate(Date.parse(iso));
+		const letters = this.rows("SELECT * FROM letters WHERE at >= ? AND at < ? ORDER BY at", from, to).map((l) => ({
+			signed_as: l.signed_as,
+			title: l.title,
+			body: l.body,
+			written_on: day(l.at),
+		}));
+		const milestones = this.rows("SELECT * FROM observations WHERE category = 'milestone' AND at >= ? AND at < ? ORDER BY at", from, to).map((o) => ({ text: o.text, on: day(o.at) }));
+		const kept = this.rows(
+			"SELECT o.text, o.at, k.note FROM keepsake_marks k JOIN observations o ON o.id = k.item_id WHERE k.item_type = 'observation' AND o.category != 'milestone' AND o.at >= ? AND o.at < ? ORDER BY o.at",
+			from,
+			to,
+		).map((r) => ({ text: r.text, on: day(r.at), note: r.note }));
+		const endMs = Math.min(Date.parse(to) - 1, nowMs);
+		const k = buildKeepsake({
+			childName: profile.display_name,
+			period,
+			ages: computeAges(profile.birth_date, profile.ga_weeks, profile.ga_days, endMs),
+			letters,
+			milestones,
+			kept,
+		});
+		const id = ulid();
+		this.sql.exec(
+			"INSERT INTO keepsakes (id, period, created_at, trigger, subject, text, html, counts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			id,
+			period,
+			new Date(nowMs).toISOString(),
+			trigger,
+			k.subject,
+			k.text,
+			k.html,
+			JSON.stringify(k.counts),
+		);
+		this.event("system", "keepsake.compiled", { id, period, trigger });
+		const delivery = this.deliverKeepsake(id);
+		return { id, period, subject: k.subject, counts: k.counts, delivery };
+	}
+	/**
+	 * Email delivery is not connected yet (libbyhd.org mail runs on Google Workspace, so it
+	 * needs a Google sending credential). Until then every letter records an explicit
+	 * NOT_SENT status. The letter itself is always kept here and in the export.
+	 */
+	private deliverKeepsake(keepsakeId: string) {
+		const to = this.setting("keepsake_email");
+		const status = to ? "NOT_SENT_DELIVERY_NOT_CONNECTED" : "NOT_SENT_NO_ADDRESS";
+		const detail = to ? "Email sending is not connected yet. The letter is saved and will be sent once it is." : "No email address set for his letters.";
+		this.sql.exec("INSERT INTO keepsake_deliveries (id, keepsake_id, at, status, detail) VALUES (?, ?, ?, ?, ?)", ulid(), keepsakeId, new Date().toISOString(), status, detail);
+		return { status, detail };
+	}
+	private keepsakeHtml(id: string): Response {
+		const k = this.one("SELECT html FROM keepsakes WHERE id = ?", id);
+		if (!k) throw new HttpError(404, "Not found");
+		return new Response(k.html, { headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'" } });
+	}
+	private keepsakeSummary() {
+		return {
+			email: this.setting("keepsake_email"),
+			letters: this.rows("SELECT id, at, signed_as, title, body FROM letters ORDER BY at DESC LIMIT 50"),
+			kept_ids: this.rows("SELECT item_id FROM keepsake_marks").map((r) => r.item_id),
+			keepsakes: this.rows("SELECT id, period, created_at, trigger, subject, counts FROM keepsakes ORDER BY created_at DESC LIMIT 36").map((k) => {
+				const d = this.one("SELECT status, detail, at FROM keepsake_deliveries WHERE keepsake_id = ? ORDER BY at DESC LIMIT 1", k.id);
+				return { ...k, label: periodLabel(k.period), counts: JSON.parse(k.counts), delivery: d };
+			}),
+		};
 	}
 
 	// ---------------- summary / export ----------------
@@ -688,6 +819,7 @@ export class PersonVault extends DurableObject<Env> {
 			sources: this.sources(),
 			last_automation_run: lastRun,
 			red_flag_guidance: RED_FLAG_GUIDANCE,
+			keepsake: this.keepsakeSummary(),
 		};
 	}
 	/** Compact, attention-first view for the parent (household) dashboard. */
@@ -709,7 +841,7 @@ export class PersonVault extends DurableObject<Env> {
 	}
 
 	private exportAll() {
-		const tables = ["events", "profile_versions", "observations", "appointments", "briefs", "issues", "issue_status_events", "medications", "med_status_events", "conflicts", "conflict_resolutions", "documents", "doc_receipts", "sources", "source_status_events", "automation_runs"];
+		const tables = ["events", "profile_versions", "observations", "appointments", "briefs", "issues", "issue_status_events", "medications", "med_status_events", "conflicts", "conflict_resolutions", "documents", "doc_receipts", "sources", "source_status_events", "automation_runs", "letters", "keepsake_marks", "keepsakes", "keepsake_deliveries", "settings"];
 		const out: Record<string, Row[]> = {};
 		for (const t of tables) out[t] = this.rows(`SELECT * FROM ${t}`);
 		return { exported_at: new Date().toISOString(), format: "familyos-person-export/v1", note: "Document bytes are downloadable individually via /api/documents/:id/raw", tables: out };

@@ -329,3 +329,49 @@ describe("Google sign-in (same client as lifeos.libbyhd.org)", () => {
 		await r.arrayBuffer();
 	});
 });
+
+describe("keepsake letters (his own story)", () => {
+	it("builds a letter from parent letters, firsts and kept moments only; never medical by default", async () => {
+		await setup(C, "KeepA");
+		await SELF.fetch(`${C}/api/letters`, j({ signed_as: "Dad", title: "Hello", body: "Synthetic test letter body" }));
+		await SELF.fetch(`${C}/api/log`, j({ text: "Smiled for the first time" })); // milestone
+		const kept = (await (await SELF.fetch(`${C}/api/log`, j({ text: "Synthetic bath-time moment" }))).json()) as any;
+		await SELF.fetch(`${C}/api/log`, j({ text: "Bottle 60 ml took 45 min" })); // not kept
+		await SELF.fetch(`${C}/api/keep`, j({ item_id: kept.id }));
+		const r = (await (await SELF.fetch(`${C}/api/keepsakes/compile`, j({}))).json()) as any;
+		expect(r.delivery.status).toBe("NOT_SENT_NO_ADDRESS");
+		const html = await (await SELF.fetch(`${C}/api/keepsakes/${r.id}`)).text();
+		expect(html).toContain("Synthetic test letter body");
+		expect(html).toContain("Smiled for the first time");
+		expect(html).toContain("Synthetic bath-time moment");
+		expect(html).not.toContain("Bottle 60 ml");
+		expect(html).toContain("Dear KeepA");
+	});
+	it("records 'not connected' delivery when an address is set, and keeps the letter", async () => {
+		await setup(F, "KeepB");
+		const put = await SELF.fetch(`${F}/api/settings/keepsake-email`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "child@example.test" }) });
+		expect(put.status).toBe(201);
+		const r = (await (await SELF.fetch(`${F}/api/keepsakes/compile`, j({}))).json()) as any;
+		expect(r.delivery.status).toBe("NOT_SENT_DELIVERY_NOT_CONNECTED");
+		const s = (await (await SELF.fetch(`${F}/api/summary`)).json()) as any;
+		expect(s.keepsake.keepsakes[0].delivery.status).toBe("NOT_SENT_DELIVERY_NOT_CONNECTED");
+	});
+	it("the monthly letter is written once on the 1st, for the previous month", async () => {
+		await setup(C, "KeepA");
+		const stub = env.PERSON_VAULT.get(env.PERSON_VAULT.idFromName("callum"));
+		const first = Date.parse("2026-12-01T15:00:00Z"); // 10:00 Toronto, Dec 1
+		const a = await runInDurableObject(stub, (o: PersonVault) => o.tick(first));
+		const b = await runInDurableObject(stub, (o: PersonVault) => o.tick(first + 3600000));
+		expect(a.keepsake).toBeTruthy();
+		expect(b.keepsake).toBeNull();
+		const s = (await (await SELF.fetch(`${C}/api/summary`)).json()) as any;
+		expect(s.keepsake.keepsakes.some((k: any) => k.period === "2026-11" && k.trigger === "monthly")).toBe(true);
+	});
+	it("letters stay with their own child", async () => {
+		await setup(C, "KeepA");
+		await setup(F, "KeepB");
+		await SELF.fetch(`${C}/api/letters`, j({ signed_as: "Mom", body: "Only-for-A synthetic" }));
+		const fs = (await (await SELF.fetch(`${F}/api/summary`)).json()) as any;
+		expect(JSON.stringify(fs.keepsake)).not.toContain("Only-for-A");
+	});
+});
