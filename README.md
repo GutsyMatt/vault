@@ -5,7 +5,11 @@ health record in one place: medications, allergies, health issues, lab
 results, immunizations and recent visits. Data is read live from the
 provider's Epic server over SMART on FHIR and is not stored.
 
-Built on Cloudflare Workers.
+The **Ask LibbyHD** assistant answers questions from the patient's own record,
+opens the matching dashboard card, and helps them prepare questions or
+messages for their care team.
+
+Built on Cloudflare Workers and Workers AI.
 
 ## Getting Started
 
@@ -23,11 +27,12 @@ Sign-in needs an Epic client ID and a session secret; see [Setup](#setup).
 /
 ├── public/
 │   ├── index.html      # Sign-in page and dashboard
-│   └── app.js          # Provider search and dashboard rendering
+│   └── app.js          # Provider search, dashboard and assistant
 ├── src/
 │   ├── index.ts        # Worker entry point and API routes
 │   ├── auth.ts         # MyChart sign-in (SMART on FHIR standalone launch)
 │   ├── record.ts       # Reads and summarizes the patient's FHIR record
+│   ├── chat.ts         # Ask LibbyHD assistant (Workers AI)
 │   └── types.ts        # Type definitions
 ├── wrangler.jsonc      # Cloudflare Worker configuration
 └── tsconfig.json       # TypeScript configuration
@@ -110,3 +115,21 @@ fields the dashboard shows:
 Patients can choose not to share some kinds of data when they allow access in
 MyChart. A section Epic refuses (401/403) shows as "Not shared with LibbyHD"
 instead of breaking the page.
+
+## Ask LibbyHD
+
+`POST /api/chat` streams a reply from Workers AI
+(`@cf/meta/llama-3.3-70b-instruct-fp8-fast`, set in `src/chat.ts`).
+
+- The patient's record is loaded on the server from their session and given to
+  the model as context; the client only sends the conversation, and any
+  client-supplied system message is dropped.
+- The assistant answers only from the record, explains results in plain
+  language, doesn't diagnose or change treatment, and points to emergency
+  services when needed.
+- When an answer is about one part of the record, the reply ends with a
+  `SHOW: <section>` line. The app strips it, scrolls to and highlights that
+  card, and adds an "Open …" button to the message.
+
+Workers AI usage is billed to your Cloudflare account, including during local
+development.

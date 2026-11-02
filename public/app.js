@@ -1,8 +1,8 @@
 /**
  * LibbyHD frontend
  *
- * Shows the provider search when signed out and the health record dashboard
- * when signed in.
+ * Shows the provider search when signed out, and the health record dashboard
+ * with the LibbyHD assistant when signed in.
  */
 
 // Items shown per section before "Show all"
@@ -214,8 +214,10 @@ async function showSignedOut() {
 // --- Signed in: dashboard ----------------------------------------------------
 
 function showSignedIn() {
+	document.body.classList.add("signed-in");
 	document.getElementById("signed-in").hidden = false;
 	document.getElementById("signout").hidden = false;
+	setUpChat();
 }
 
 function renderSkeletons() {
@@ -248,6 +250,7 @@ function renderRecord(record) {
 		.replaceChildren(
 			...SECTIONS.map((section) => renderSection(section, record[section.key])),
 		);
+	greetInChat(firstName);
 }
 
 function renderSection(section, data) {
@@ -296,6 +299,7 @@ function renderSection(section, data) {
 function createCard(section) {
 	const card = document.createElement("section");
 	card.className = section.wide ? "card wide" : "card";
+	card.id = `section-${section.key}`;
 	card.innerHTML = `
 		<div class="card-head">
 			<span class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[section.key]}</svg></span>
@@ -362,4 +366,233 @@ function formatDate(value) {
 		month: "short",
 		day: "numeric",
 	});
+}
+
+// --- Assistant ---------------------------------------------------------------
+
+const SUGGESTIONS = [
+	"Summarize my health",
+	"Explain my latest lab results",
+	"Show my medications",
+	"What should I ask at my next visit?",
+];
+
+const chatHistory = [];
+let chatBusy = false;
+
+function setUpChat() {
+	const chat = document.getElementById("chat");
+	const form = document.getElementById("chat-form");
+	const input = document.getElementById("chat-input");
+
+	document.getElementById("chat-open").addEventListener("click", openChat);
+	document.getElementById("chat-close").addEventListener("click", closeChat);
+
+	input.addEventListener("input", () => {
+		input.style.height = "auto";
+		input.style.height = `${input.scrollHeight}px`;
+	});
+	input.addEventListener("keydown", (e) => {
+		if (e.key === "Enter" && !e.shiftKey) {
+			e.preventDefault();
+			form.requestSubmit();
+		}
+	});
+	form.addEventListener("submit", (e) => {
+		e.preventDefault();
+		sendChatMessage(input.value);
+	});
+	chat.addEventListener("keydown", (e) => {
+		if (e.key === "Escape") closeChat();
+	});
+
+	document.getElementById("suggestions").replaceChildren(
+		...SUGGESTIONS.map((text) => {
+			const button = document.createElement("button");
+			button.type = "button";
+			button.textContent = text;
+			button.addEventListener("click", () => sendChatMessage(text));
+			return button;
+		}),
+	);
+}
+
+function greetInChat(firstName) {
+	if (chatHistory.length) return;
+	const greeting = `Hi ${firstName}, I'm LibbyHD. I can explain anything in your record, find things for you, and help you get ready for your next appointment. What would you like to know?`;
+	addBubble("assistant", greeting);
+	chatHistory.push({ role: "assistant", content: greeting });
+}
+
+function openChat() {
+	document.getElementById("chat").classList.add("open");
+	document.body.classList.add("chat-open");
+	document.getElementById("chat-input").focus();
+}
+
+function closeChat() {
+	document.getElementById("chat").classList.remove("open");
+	document.body.classList.remove("chat-open");
+}
+
+async function sendChatMessage(text) {
+	const message = text.trim();
+	if (!message || chatBusy) return;
+
+	const input = document.getElementById("chat-input");
+	const send = document.getElementById("chat-send");
+	input.value = "";
+	input.style.height = "auto";
+	document.getElementById("suggestions").hidden = true;
+
+	addBubble("user", message);
+	chatHistory.push({ role: "user", content: message });
+
+	chatBusy = true;
+	send.disabled = true;
+	const bubble = addBubble("assistant", "Looking at your record…");
+	bubble.classList.add("thinking");
+
+	let reply = "";
+	try {
+		const response = await fetch("/api/chat", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ messages: chatHistory }),
+		});
+		if (response.status === 401) {
+			window.location.reload();
+			return;
+		}
+		if (!response.ok || !response.body) throw new Error("Chat request failed");
+
+		for await (const chunk of readSseText(response.body)) {
+			reply += chunk;
+			bubble.classList.remove("thinking");
+			renderReply(bubble, splitNavigation(reply).text);
+		}
+		const { text: answer, section } = splitNavigation(reply);
+		if (!answer) throw new Error("Empty reply");
+		renderReply(bubble, answer);
+		chatHistory.push({ role: "assistant", content: reply });
+		if (section) {
+			addNavigationChip(section);
+			showSection(section);
+		}
+	} catch (err) {
+		console.error("Error:", err);
+		bubble.classList.remove("thinking");
+		bubble.textContent =
+			"Sorry, I couldn't answer that just now. Please try again.";
+	} finally {
+		chatBusy = false;
+		send.disabled = false;
+	}
+}
+
+/**
+ * Separates the assistant's trailing "SHOW: <section>" line from its answer
+ */
+function splitNavigation(reply) {
+	const match = reply.match(/^\s*SHOW:\s*([a-z]+)\s*$/im);
+	const text = reply
+		.replace(/^\s*SHOW:.*$/gim, "")
+		// Hide a SHOW line that is still streaming in
+		.replace(/\n\s*S(H(O(W:?)?)?)?$/i, "")
+		.trim();
+	const section = SECTIONS.find((s) => s.key === match?.[1]?.toLowerCase());
+	return { text, section };
+}
+
+function addBubble(role, text) {
+	const bubble = document.createElement("div");
+	bubble.className = `bubble ${role}`;
+	if (role === "assistant") renderReply(bubble, text);
+	else bubble.textContent = text;
+	const messages = document.getElementById("chat-messages");
+	messages.appendChild(bubble);
+	messages.scrollTop = messages.scrollHeight;
+	return bubble;
+}
+
+/**
+ * Renders plain text with **bold** spans, without interpreting any HTML
+ */
+function renderReply(bubble, text) {
+	bubble.replaceChildren(
+		...text.split(/(\*\*[^*]+\*\*)/).map((part) => {
+			if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+				const strong = document.createElement("strong");
+				strong.textContent = part.slice(2, -2);
+				return strong;
+			}
+			return document.createTextNode(part);
+		}),
+	);
+	const messages = document.getElementById("chat-messages");
+	messages.scrollTop = messages.scrollHeight;
+}
+
+function addNavigationChip(section) {
+	const chip = document.createElement("button");
+	chip.type = "button";
+	chip.className = "nav-chip";
+	chip.textContent = `Open ${section.title} →`;
+	chip.addEventListener("click", () => showSection(section));
+	document.getElementById("chat-messages").appendChild(chip);
+}
+
+/**
+ * Scrolls the dashboard to a section's card, expands it and highlights it
+ */
+function showSection(section) {
+	const card = document.getElementById(`section-${section.key}`);
+	if (!card) return;
+
+	// On small screens the chat covers the dashboard; get it out of the way
+	if (document.getElementById("chat").classList.contains("open")) closeChat();
+
+	card
+		.querySelectorAll(".items li[hidden]")
+		.forEach((li) => (li.hidden = false));
+	card.querySelector(".more")?.remove();
+	card.scrollIntoView({ behavior: "smooth", block: "start" });
+	card.classList.add("highlight");
+	setTimeout(() => card.classList.remove("highlight"), 2400);
+}
+
+/**
+ * Yields text from a Workers AI Server-Sent Events stream
+ */
+async function* readSseText(body) {
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	while (true) {
+		const { done, value } = await reader.read();
+		buffer += done ? "\n\n" : decoder.decode(value, { stream: true });
+		buffer = buffer.replace(/\r/g, "");
+
+		let end;
+		while ((end = buffer.indexOf("\n\n")) !== -1) {
+			const event = buffer.slice(0, end);
+			buffer = buffer.slice(end + 2);
+			const data = event
+				.split("\n")
+				.filter((line) => line.startsWith("data:"))
+				.map((line) => line.slice(5).trimStart())
+				.join("\n");
+			if (!data) continue;
+			if (data === "[DONE]") return;
+			try {
+				const json = JSON.parse(data);
+				// Workers AI format (response) or OpenAI format (choices[0].delta.content)
+				const text = json.response ?? json.choices?.[0]?.delta?.content;
+				if (text) yield text;
+			} catch (err) {
+				console.error("Error parsing SSE data as JSON:", err, data);
+			}
+		}
+		if (done) return;
+	}
 }

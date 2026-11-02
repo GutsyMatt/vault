@@ -457,6 +457,268 @@
 				}
 			}
 
+			/* Signed-in layout: dashboard plus assistant */
+
+			body.signed-in .wrap {
+				max-width: 1320px;
+			}
+
+			@media (min-width: 1100px) {
+				.layout {
+					display: grid;
+					grid-template-columns: minmax(0, 1fr) 380px;
+					gap: 24px;
+					align-items: start;
+				}
+			}
+
+			.chat {
+				display: flex;
+				flex-direction: column;
+				background: var(--surface);
+				border: 1px solid var(--border);
+				border-radius: var(--radius);
+				box-shadow: var(--shadow);
+				overflow: hidden;
+			}
+
+			@media (min-width: 1100px) {
+				.chat {
+					position: sticky;
+					top: 16px;
+					height: calc(100vh - 32px);
+					margin-top: 12px;
+				}
+				.chat-close,
+				.chat-fab {
+					display: none !important;
+				}
+			}
+
+			@media (max-width: 1099px) {
+				.chat {
+					display: none;
+					position: fixed;
+					inset: 0;
+					z-index: 20;
+					border-radius: 0;
+					border: none;
+				}
+				.chat.open {
+					display: flex;
+				}
+				body.chat-open {
+					overflow: hidden;
+				}
+			}
+
+			.chat-head {
+				display: flex;
+				align-items: center;
+				gap: 12px;
+				padding: 16px 18px;
+				border-bottom: 1px solid var(--border);
+			}
+
+			.chat-head h2 {
+				margin: 0;
+				font-size: 1.05rem;
+			}
+
+			.chat-head p {
+				margin: 0;
+				font-size: 0.85rem;
+				color: var(--text-muted);
+			}
+
+			.chat-close {
+				margin-left: auto;
+				display: grid;
+				place-items: center;
+				width: 38px;
+				height: 38px;
+				border: none;
+				border-radius: 50%;
+				background: var(--surface-muted);
+				color: var(--text);
+				cursor: pointer;
+			}
+
+			.chat-close svg {
+				width: 20px;
+				height: 20px;
+			}
+
+			.chat-messages {
+				flex: 1;
+				overflow-y: auto;
+				padding: 16px 18px;
+				display: flex;
+				flex-direction: column;
+				gap: 12px;
+			}
+
+			.bubble {
+				max-width: 88%;
+				padding: 10px 14px;
+				border-radius: 16px;
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+				font-size: 0.95rem;
+			}
+
+			.bubble.user {
+				align-self: flex-end;
+				background: var(--accent);
+				color: #fff;
+				border-bottom-right-radius: 6px;
+			}
+
+			.bubble.assistant {
+				align-self: flex-start;
+				background: var(--surface-muted);
+				border: 1px solid var(--border);
+				border-bottom-left-radius: 6px;
+			}
+
+			.bubble.thinking {
+				color: var(--text-muted);
+				font-style: italic;
+			}
+
+			.nav-chip {
+				align-self: flex-start;
+				display: inline-flex;
+				align-items: center;
+				gap: 6px;
+				margin-top: -4px;
+				padding: 6px 12px;
+				border: 1px solid var(--accent);
+				border-radius: 999px;
+				background: none;
+				color: var(--accent);
+				font: inherit;
+				font-size: 0.85rem;
+				font-weight: 600;
+				cursor: pointer;
+			}
+
+			.suggestions {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px;
+				padding: 0 18px 12px;
+			}
+
+			.suggestions button {
+				padding: 8px 12px;
+				border: 1px solid var(--border);
+				border-radius: 999px;
+				background: var(--surface);
+				color: var(--text);
+				font: inherit;
+				font-size: 0.85rem;
+				cursor: pointer;
+			}
+
+			.suggestions button:hover {
+				border-color: var(--accent);
+				color: var(--accent);
+			}
+
+			.chat-input {
+				display: flex;
+				gap: 8px;
+				padding: 12px 18px 4px;
+				border-top: 1px solid var(--border);
+			}
+
+			.chat-input textarea {
+				flex: 1;
+				resize: none;
+				max-height: 140px;
+				padding: 12px 14px;
+				font: inherit;
+				color: var(--text);
+				background: var(--surface-muted);
+				border: 1px solid var(--border);
+				border-radius: 12px;
+				outline: none;
+			}
+
+			.chat-input textarea:focus {
+				border-color: var(--accent);
+				box-shadow: 0 0 0 3px var(--accent-soft);
+			}
+
+			.chat-input button {
+				flex: none;
+				align-self: flex-end;
+				display: grid;
+				place-items: center;
+				width: 46px;
+				height: 46px;
+				border: none;
+				border-radius: 12px;
+				background: var(--accent);
+				color: #fff;
+				cursor: pointer;
+			}
+
+			.chat-input button:disabled {
+				opacity: 0.45;
+				cursor: not-allowed;
+			}
+
+			.chat-input svg {
+				width: 20px;
+				height: 20px;
+			}
+
+			.chat-disclaimer {
+				margin: 0;
+				padding: 4px 18px 14px;
+				font-size: 0.75rem;
+				color: var(--text-muted);
+			}
+
+			.chat-fab {
+				position: fixed;
+				right: 16px;
+				bottom: 16px;
+				z-index: 10;
+				display: inline-flex;
+				align-items: center;
+				gap: 8px;
+				padding: 14px 20px;
+				border: none;
+				border-radius: 999px;
+				background: var(--accent);
+				color: #fff;
+				font: inherit;
+				font-weight: 600;
+				box-shadow: 0 6px 20px rgb(14 124 123 / 0.35);
+				cursor: pointer;
+			}
+
+			.chat-fab svg {
+				width: 20px;
+				height: 20px;
+			}
+
+			.card.highlight {
+				border-color: var(--accent);
+				box-shadow: 0 0 0 4px var(--accent-soft);
+				transition: box-shadow 0.3s, border-color 0.3s;
+			}
+
+			@media (max-width: 1099px) {
+				/* Leave room for the chat button below the last card */
+				body.signed-in footer {
+					padding-bottom: 96px;
+				}
+			}
+
 			.error-banner {
 				background: var(--warn-soft);
 				color: var(--warn);
@@ -550,16 +812,55 @@
 			</main>
 
 			<!-- Signed in -->
-			<main id="signed-in" hidden>
-				<section class="greeting">
-					<h1 id="greeting-name">Your health record</h1>
-					<p id="greeting-sub"></p>
-				</section>
-				<div class="error-banner" id="record-error" hidden>
-					We couldn't load your record right now. Please try again in a moment.
-				</div>
-				<div class="grid" id="sections"></div>
-			</main>
+			<div class="layout" id="signed-in" hidden>
+				<main>
+					<section class="greeting">
+						<h1 id="greeting-name">Your health record</h1>
+						<p id="greeting-sub"></p>
+					</section>
+					<div class="error-banner" id="record-error" hidden>
+						We couldn't load your record right now. Please try again in a
+						moment.
+					</div>
+					<div class="grid" id="sections"></div>
+				</main>
+
+				<aside class="chat" id="chat" aria-label="Ask LibbyHD">
+					<div class="chat-head">
+						<span class="card-icon">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+						</span>
+						<div>
+							<h2>Ask LibbyHD</h2>
+							<p>Answers from your own record</p>
+						</div>
+						<button class="chat-close" id="chat-close" aria-label="Close chat">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+						</button>
+					</div>
+					<div class="chat-messages" id="chat-messages" aria-live="polite"></div>
+					<div class="suggestions" id="suggestions"></div>
+					<form class="chat-input" id="chat-form">
+						<textarea
+							id="chat-input"
+							rows="1"
+							placeholder="Ask about your health record…"
+							aria-label="Message LibbyHD"
+						></textarea>
+						<button id="chat-send" aria-label="Send">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+						</button>
+					</form>
+					<p class="chat-disclaimer">
+						Not medical advice. In an emergency, call 911.
+					</p>
+				</aside>
+
+				<button class="chat-fab" id="chat-open">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+					Ask LibbyHD
+				</button>
+			</div>
 
 			<footer>
 				LibbyHD reads your record directly from your provider and doesn't store

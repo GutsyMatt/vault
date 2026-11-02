@@ -12,6 +12,9 @@
 		"binding": "ASSETS",
 		"directory": "./public"
 	},
+	"ai": {
+		"binding": "AI"
+	},
 	"observability": {
 		"enabled": true
 	},

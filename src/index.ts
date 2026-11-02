@@ -1,13 +1,15 @@
 /**
  * LibbyHD
  *
- * Patients sign in with their healthcare provider's MyChart and see a summary
- * of their own health record, read live from Epic over SMART on FHIR.
+ * Patients sign in with their healthcare provider's MyChart, see a summary of
+ * their own health record read live from Epic over SMART on FHIR, and ask an
+ * assistant about it.
  *
  * @license MIT
  */
 import { Env } from "./types";
 import { getPatientSession, getProviders, handleAuthRequest } from "./auth";
+import { handleChatRequest } from "./chat";
 import { getHealthRecord } from "./record";
 
 export default {
@@ -53,6 +55,27 @@ export default {
 		if (url.pathname === "/api/record") {
 			if (request.method === "GET") {
 				return handleRecordRequest(request, env);
+			}
+			return new Response("Method not allowed", { status: 405 });
+		}
+
+		if (url.pathname === "/api/chat") {
+			if (request.method === "POST") {
+				const { session, setCookie } = await getPatientSession(request, env);
+				if (!session) {
+					return Response.json({ authenticated: false }, { status: 401 });
+				}
+				try {
+					const response = await handleChatRequest(request, env, session);
+					if (setCookie) response.headers.append("set-cookie", setCookie);
+					return response;
+				} catch (error) {
+					console.error("Error processing chat request:", error);
+					return Response.json(
+						{ error: "Failed to process request" },
+						{ status: 500 },
+					);
+				}
 			}
 			return new Response("Method not allowed", { status: 405 });
 		}
