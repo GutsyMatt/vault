@@ -35,11 +35,10 @@ export async function syncDriveFolder(env: Env, person:string, folder:string, op
    const dest=env.PERSON_VAULT.get(env.PERSON_VAULT.idFromName(person));
    const prior=await dest.fetch("https://vault/drive-imports/"+encodeURIComponent(f.id),{headers:{"x-actor":"system:drive-ingestion"}});
    if(!prior.ok){result.errors++;continue}
-   const old=await prior.json() as {source_hash?:string|null};
+   const old=await prior.json() as {source_hash?:string|null;source_version?:string|null};
    // Google Drive md5 is metadata only; it determines whether to skip an unchanged source.
-   if(old.source_hash && f.md5Checksum) {
-    // Hash algorithms differ; compare by file revisions below, not mismatched digests.
-   }
+   const sourceVersion=[f.md5Checksum||"",f.modifiedTime||"",f.size||""].join(":");
+   if(old.source_version && sourceVersion === old.source_version){result.duplicates++;continue}
    const response=await fetcher("https://www.googleapis.com/drive/v3/files/"+encodeURIComponent(f.id)+"?alt=media",{headers});
    if(!response.ok){result.errors++;continue}
    const data=await response.arrayBuffer();
@@ -52,7 +51,7 @@ export async function syncDriveFolder(env: Env, person:string, folder:string, op
    if(!saved.ok){result.errors++;continue}
    const receipt=await saved.json() as {duplicate?:boolean};
    if(!receipt.id){result.errors++;continue}
-   const confirmed=await dest.fetch("https://vault/drive-imports/"+encodeURIComponent(f.id),{method:"POST",headers:{"content-type":"application/json","x-actor":"system:drive-ingestion"},body:JSON.stringify({document_id:receipt.id,source_hash:receipt.sha256})});
+   const confirmed=await dest.fetch("https://vault/drive-imports/"+encodeURIComponent(f.id),{method:"POST",headers:{"content-type":"application/json","x-actor":"system:drive-ingestion"},body:JSON.stringify({document_id:receipt.id,source_hash:receipt.sha256,source_version:sourceVersion})});
    if(!confirmed.ok){result.errors++;continue}
    if(receipt.duplicate)result.duplicates++;else result.stored++;
   }catch{result.errors++}
