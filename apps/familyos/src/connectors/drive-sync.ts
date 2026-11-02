@@ -10,6 +10,7 @@ export function acceptedDriveItem(f:DriveItem):boolean {
 }
 export async function syncDriveFolder(env: Env, person:string, folder:string, opts:{fetcher?:typeof fetch; dryRun?:boolean}={}):Promise<{scanned:number;stored:number;duplicates:number;skipped:number;errors:number}> {
  const result={scanned:0,stored:0,duplicates:0,skipped:0,errors:0};
+ const failures:{source_id:string;reason:string}[]=[];
  if(!/^[A-Za-z0-9_-]{8,200}$/.test(folder)||!["callum","finnley"].includes(person))throw Error("Invalid approved Drive folder or person");
  if(!env.DRIVE_CLIENT_ID||!env.DRIVE_CLIENT_SECRET||!env.DRIVE_REFRESH_TOKEN)throw Error("Google Drive OAuth secrets not configured");
  const fetcher=opts.fetcher||fetch;
@@ -35,13 +36,13 @@ export async function syncDriveFolder(env: Env, person:string, folder:string, op
   try{
    const dest=env.PERSON_VAULT.get(env.PERSON_VAULT.idFromName(person));
    const prior=await dest.fetch("https://vault/drive-imports/"+encodeURIComponent(f.id),{headers:{"x-actor":"system:drive-ingestion"}});
-   if(!prior.ok){result.errors++;continue}
+   if(!prior.ok){result.errors++;failures.push({source_id:f.id,reason:'RECEIPT_READ_FAILED'});continue}
    const old=await prior.json() as {source_hash?:string|null;source_version?:string|null};
    // Google Drive md5 is metadata only; it determines whether to skip an unchanged source.
    const sourceVersion=[f.md5Checksum||"",f.modifiedTime||"",f.size||""].join(":");
    if(old.source_version && sourceVersion === old.source_version){result.duplicates++;continue}
    const response=await fetcher("https://www.googleapis.com/drive/v3/files/"+encodeURIComponent(f.id)+"?alt=media",{headers});
-   if(!response.ok){result.errors++;continue}
+   if(!response.ok){result.errors++;failures.push({source_id:f.id,reason:'DOWNLOAD_FAILED'});continue}
    const data=await response.arrayBuffer();
    if(!data.byteLength||data.byteLength>MAX_UPLOAD){result.skipped++;continue}
    const docUrl=new URL("https://vault/documents");
@@ -49,15 +50,21 @@ export async function syncDriveFolder(env: Env, person:string, folder:string, op
    docUrl.searchParams.set("verification","EXTRACTED");
    docUrl.searchParams.set("note","Google Drive file ID: "+f.id);
    const saved=await dest.fetch(new Request(docUrl,{method:"POST",headers:{"content-type":f.mimeType,"x-actor":"system:drive-ingestion","x-route":"/documents"},body:data}));
-   if(!saved.ok){result.errors++;continue}
+   if(!saved.ok){result.errors++;failures.push({source_id:f.id,reason:'DOCUMENT_WRITE_FAILED'});continue}
    const receipt=await saved.json() as {duplicate?:boolean;id?:string;sha256?:string};
    const computedHash=await sha256Hex(new Uint8Array(data));
-   if(receipt.sha256!==computedHash){result.errors++;continue}
-   if(!receipt.id){result.errors++;continue}
+   if(receipt.sha256!==computedHash){result.errors++;failures.push({source_id:f.id,reason:'HASH_MISMATCH'});continue}
+   if(!receipt.id){result.errors++;failures.push({source_id:f.id,reason:'MISSING_RECEIPT_ID'});continue}
    const confirmed=await dest.fetch("https://vault/drive-imports/"+encodeURIComponent(f.id),{method:"POST",headers:{"content-type":"application/json","x-actor":"system:drive-ingestion"},body:JSON.stringify({document_id:receipt.id,source_hash:receipt.sha256,source_version:sourceVersion})});
-   if(!confirmed.ok){result.errors++;continue}
+   if(!confirmed.ok){result.errors++;failures.push({source_id:f.id,reason:'SOURCE_LEDGER_FAILED'});continue}
    if(receipt.duplicate)result.duplicates++;else result.stored++;
-  }catch{result.errors++}
+  }catch{result.errors++;failures.push({source_id:f.id,reason:'IMPORT_EXCEPTION'})}
+ }
+ if(!opts.dryRun){
+  const dest=env.PERSON_VAULT.get(env.PERSON_VAULT.idFromName(person));
+  for(const failure of failures)await dest.fetch('https://vault/drive-sync/failure',{method:'POST',headers:{'content-type':'application/json','x-actor':'system:drive-ingestion'},body:JSON.stringify(failure)});
+  const report=await dest.fetch('https://vault/drive-sync/report',{method:'POST',headers:{'content-type':'application/json','x-actor':'system:drive-ingestion'},body:JSON.stringify({person,...result,detail:result.errors?'DEGRADED':'OK'})});
+  if(!report.ok)throw Error('Could not persist Drive sync run report');
  }
  return result;
 }
