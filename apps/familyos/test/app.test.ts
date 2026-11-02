@@ -426,3 +426,10 @@ describe("photos and his story by week", () => {
 		await r.arrayBuffer();
 	});
 });
+
+describe("setup is pre-filled from presentation settings", () => {
+	it("whoami returns this child's name, label and side", async () => {
+		const w = (await (await SELF.fetch(`${C}/api/whoami`)).json()) as any;
+		expect(w.presentation).toMatchObject({ name: "Callum", label: "Baby A · LEFT", side: "left" });
+	});
+});

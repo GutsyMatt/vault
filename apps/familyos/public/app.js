@@ -104,8 +104,10 @@ function renderHeader() {
 	$("#fresh").textContent = `Updated ${t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. ${state.sources.filter((s) => s.status !== "CONNECTED").length} source(s) not connected (see Sources).`;
 }
 
-function renderSetup() {
+async function renderSetup() {
 	const el = $("#setup");
+	let pres = null;
+	try { pres = (await api("/whoami")).presentation; } catch {}
 	el.hidden = false;
 	document.querySelector(".tabs").hidden = true;
 	document.querySelectorAll("[data-panel]").forEach((p) => (p.hidden = true));
@@ -114,15 +116,15 @@ function renderSetup() {
 		<h2>Set up this record</h2>
 		<p class="muted">Enter the basics once. You can correct them later; earlier versions are kept.</p>
 		<form id="profile-form">
-			<label for="pf-name">Name</label><input id="pf-name" name="display_name" required autocomplete="off">
+			<label for="pf-name">Name</label><input id="pf-name" name="display_name" required autocomplete="off" value="${esc(pres?.name || "")}">
 			<div class="grid2">
 				<div><label for="pf-birth">Birth date</label><input id="pf-birth" name="birth_date" type="date" required></div>
-				<div><label for="pf-label">Label (optional)</label><input id="pf-label" name="label" placeholder="Baby A · LEFT"></div>
+				<div><label for="pf-label">Label (optional)</label><input id="pf-label" name="label" value="${esc(pres?.label || "")}"></div>
 				<div><label for="pf-gaw">Weeks at birth</label><input id="pf-gaw" name="ga_weeks" type="number" min="22" max="44" required></div>
 				<div><label for="pf-gad">+ days</label><input id="pf-gad" name="ga_days" type="number" min="0" max="6" value="0"></div>
 			</div>
 			<label for="pf-side">Colour / side</label>
-			<select id="pf-side" name="side"><option value="">None</option><option value="left">Left</option><option value="right">Right</option></select>
+			<select id="pf-side" name="side"><option value="">None</option><option value="left" ${pres?.side === "left" ? "selected" : ""}>Left</option><option value="right" ${pres?.side === "right" ? "selected" : ""}>Right</option></select>
 			<p><button type="submit">Save</button></p>
 		</form>
 	</div>`;
