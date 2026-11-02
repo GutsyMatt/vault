@@ -44,7 +44,7 @@ jobs:
           code=$?
           cat smoke.txt
           if [ "$code" -ne 1 ]; then echo "Expected controlled failure, got $code"; exit 1; fi
-      - name: Upload native executable
+      - name: Positive native end-to-end smoke test (synthetic records)\n        run: node tools/native-smoke.mjs dist/portable/${{ matrix.bin }}\n      - name: Upload native executable
         uses: actions/upload-artifact@v4
         with:
           name: familyos-viewer-${{ matrix.target }}
