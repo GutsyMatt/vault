@@ -4,9 +4,10 @@
  * Implements the OAuth 2.0 authorization code flow with PKCE that Epic uses
  * for patient-facing apps:
  *
- *   1. /auth/login     discovers the authorize/token endpoints from the FHIR
+ *   1. /auth/login     takes the patient's chosen healthcare provider (`iss`),
+ *                      discovers its authorize/token endpoints from the FHIR
  *                      server's .well-known/smart-configuration, then redirects
- *                      the patient to MyChart to sign in.
+ *                      the patient to that provider's MyChart to sign in.
  *   2. /auth/callback  verifies `state`, exchanges the code (plus the PKCE
  *                      verifier) for an access token and stores the session.
  *   3. /auth/logout    clears the session.
@@ -22,6 +23,12 @@ import { Env, PatientSession } from "./types";
 // Epic's public sandbox FHIR R4 endpoint, used when EPIC_FHIR_BASE_URL is unset
 const DEFAULT_FHIR_BASE_URL =
 	"https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4";
+
+// Epic's public directory of organizations' production FHIR R4 endpoints
+const ENDPOINT_DIRECTORY_URL = "https://open.epic.com/Endpoints/R4";
+
+// How long to cache the endpoint directory (seconds)
+const DIRECTORY_TTL = 60 * 60 * 24;
 
 // Scopes requested at authorization. Epic grants FHIR access based on the
 // app's registration, but `launch/patient` is required for a standalone
@@ -45,8 +52,14 @@ interface SmartConfiguration {
 	token_endpoint: string;
 }
 
+export interface Provider {
+	name: string;
+	url: string;
+}
+
 interface PendingAuth {
 	state: string;
+	fhirBaseUrl: string;
 	codeVerifier: string;
 	redirectUri: string;
 	tokenEndpoint: string;
@@ -92,15 +105,23 @@ export async function handleAuthRequest(
  * Starts the authorization code flow by redirecting to Epic's authorize endpoint.
  */
 async function handleLogin(request: Request, env: Env): Promise<Response> {
-	const clientId = env.EPIC_CLIENT_ID;
-	if (!clientId || !env.SESSION_SECRET) {
+	if (!env.EPIC_CLIENT_ID || !env.SESSION_SECRET) {
 		return new Response(
 			"Patient sign-in is not configured: set EPIC_CLIENT_ID and SESSION_SECRET.",
 			{ status: 500 },
 		);
 	}
 
-	const fhirBaseUrl = getFhirBaseUrl(env);
+	// Only send patients to providers we know about, so `iss` can't be used to
+	// redirect them (and their authorization code) to an arbitrary server.
+	const iss = new URL(request.url).searchParams.get("iss");
+	const fhirBaseUrl = iss ? normalizeUrl(iss) : getDefaultFhirBaseUrl(env);
+	const providers = await getProviders(env);
+	if (!providers.some((provider) => provider.url === fhirBaseUrl)) {
+		return new Response("Unknown healthcare provider.", { status: 400 });
+	}
+
+	const clientId = getClientId(env, fhirBaseUrl);
 	const smart = await discoverSmartConfiguration(fhirBaseUrl);
 	const redirectUri =
 		env.EPIC_REDIRECT_URI || new URL("/auth/callback", request.url).toString();
@@ -131,6 +152,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 
 	const pending: PendingAuth = {
 		state,
+		fhirBaseUrl,
 		codeVerifier,
 		redirectUri,
 		tokenEndpoint: smart.token_endpoint,
@@ -182,12 +204,17 @@ async function handleCallback(request: Request, env: Env): Promise<Response> {
 
 	let token: TokenResponse;
 	try {
-		token = await requestToken(pending.tokenEndpoint, env, {
-			grant_type: "authorization_code",
-			code,
-			redirect_uri: pending.redirectUri,
-			code_verifier: pending.codeVerifier,
-		});
+		token = await requestToken(
+			pending.tokenEndpoint,
+			env,
+			pending.fhirBaseUrl,
+			{
+				grant_type: "authorization_code",
+				code,
+				redirect_uri: pending.redirectUri,
+				code_verifier: pending.codeVerifier,
+			},
+		);
 	} catch (err) {
 		console.error("Epic token exchange failed:", err);
 		return authError("Could not complete sign-in with MyChart.", clearPending);
@@ -203,7 +230,7 @@ async function handleCallback(request: Request, env: Env): Promise<Response> {
 	const session = sessionFromToken(
 		token,
 		pending.tokenEndpoint,
-		getFhirBaseUrl(env),
+		pending.fhirBaseUrl,
 	);
 	const sessionCookie = await sealSessionCookie(session, env);
 	return redirect("/", [clearPending, sessionCookie]);
@@ -233,10 +260,15 @@ export async function getPatientSession(
 	}
 
 	try {
-		const token = await requestToken(session.tokenEndpoint, env, {
-			grant_type: "refresh_token",
-			refresh_token: session.refreshToken,
-		});
+		const token = await requestToken(
+			session.tokenEndpoint,
+			env,
+			session.fhirBaseUrl,
+			{
+				grant_type: "refresh_token",
+				refresh_token: session.refreshToken,
+			},
+		);
 		const refreshed = sessionFromToken(
 			{
 				...token,
@@ -271,8 +303,83 @@ export async function fetchFhir(
 	});
 }
 
-function getFhirBaseUrl(env: Env): string {
-	return (env.EPIC_FHIR_BASE_URL || DEFAULT_FHIR_BASE_URL).replace(/\/+$/, "");
+/**
+ * Lists the healthcare providers patients can sign in with: the default FHIR
+ * server (the Epic sandbox unless EPIC_FHIR_BASE_URL is set) followed by every
+ * organization in Epic's endpoint directory, when a production client ID is set.
+ */
+export async function getProviders(env: Env): Promise<Provider[]> {
+	const defaultUrl = getDefaultFhirBaseUrl(env);
+	const providers: Provider[] = [
+		{
+			name:
+				defaultUrl === DEFAULT_FHIR_BASE_URL
+					? "Epic Sandbox (test patients)"
+					: "Default provider",
+			url: defaultUrl,
+		},
+	];
+	if (!env.EPIC_PRODUCTION_CLIENT_ID) return providers;
+
+	try {
+		for (const provider of await getDirectory()) {
+			if (provider.url !== defaultUrl) providers.push(provider);
+		}
+	} catch (err) {
+		console.error("Failed to load Epic endpoint directory:", err);
+	}
+	return providers;
+}
+
+let directoryCache: { providers: Provider[]; expiresAt: number } | undefined;
+
+async function getDirectory(): Promise<Provider[]> {
+	if (directoryCache && directoryCache.expiresAt > now()) {
+		return directoryCache.providers;
+	}
+
+	const response = await fetch(ENDPOINT_DIRECTORY_URL, {
+		headers: { accept: "application/json" },
+		cf: { cacheTtl: DIRECTORY_TTL, cacheEverything: true },
+	});
+	if (!response.ok) {
+		throw new Error(`Endpoint directory request failed: ${response.status}`);
+	}
+	const bundle = (await response.json()) as {
+		entry?: {
+			resource?: { name?: string; status?: string; address?: string };
+		}[];
+	};
+
+	const providers = (bundle.entry ?? [])
+		.map((entry) => entry.resource)
+		.filter((resource) => resource?.status === "active" && resource.address)
+		.map((resource) => ({
+			name: resource!.name || resource!.address!,
+			url: normalizeUrl(resource!.address!),
+		}))
+		.sort((a, b) => a.name.localeCompare(b.name));
+
+	directoryCache = { providers, expiresAt: now() + DIRECTORY_TTL };
+	return providers;
+}
+
+function getDefaultFhirBaseUrl(env: Env): string {
+	return normalizeUrl(env.EPIC_FHIR_BASE_URL || DEFAULT_FHIR_BASE_URL);
+}
+
+/**
+ * Epic issues separate client IDs for its sandbox and for production
+ * organizations; use the production one for any server but the sandbox.
+ */
+function getClientId(env: Env, fhirBaseUrl: string): string {
+	return fhirBaseUrl === DEFAULT_FHIR_BASE_URL
+		? env.EPIC_CLIENT_ID
+		: env.EPIC_PRODUCTION_CLIENT_ID || env.EPIC_CLIENT_ID;
+}
+
+function normalizeUrl(url: string): string {
+	return url.replace(/\/+$/, "");
 }
 
 async function discoverSmartConfiguration(
@@ -301,8 +408,10 @@ async function discoverSmartConfiguration(
 async function requestToken(
 	tokenEndpoint: string,
 	env: Env,
+	fhirBaseUrl: string,
 	params: Record<string, string>,
 ): Promise<TokenResponse> {
+	const clientId = getClientId(env, fhirBaseUrl);
 	const headers: Record<string, string> = {
 		"content-type": "application/x-www-form-urlencoded",
 		accept: "application/json",
@@ -310,10 +419,10 @@ async function requestToken(
 	const body = new URLSearchParams(params);
 	if (env.EPIC_CLIENT_SECRET) {
 		headers.authorization = `Basic ${btoa(
-			`${encodeURIComponent(env.EPIC_CLIENT_ID)}:${encodeURIComponent(env.EPIC_CLIENT_SECRET)}`,
+			`${encodeURIComponent(clientId)}:${encodeURIComponent(env.EPIC_CLIENT_SECRET)}`,
 		)}`;
 	} else {
-		body.set("client_id", env.EPIC_CLIENT_ID);
+		body.set("client_id", clientId);
 	}
 
 	const response = await fetch(tokenEndpoint, {
@@ -364,7 +473,10 @@ async function sealSessionCookie(
 function authError(message: string, setCookie: string): Response {
 	return new Response(message, {
 		status: 400,
-		headers: { "content-type": "text/plain; charset=utf-8", "set-cookie": setCookie },
+		headers: {
+			"content-type": "text/plain; charset=utf-8",
+			"set-cookie": setCookie,
+		},
 	});
 }
 
@@ -462,7 +574,10 @@ function randomString(byteLength: number): string {
 function base64UrlEncode(bytes: Uint8Array): string {
 	let binary = "";
 	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+	return btoa(binary)
+		.replace(/\+/g, "-")
+		.replace(/\//g, "_")
+		.replace(/=+$/, "");
 }
 
 function base64UrlDecode(value: string): Uint8Array {

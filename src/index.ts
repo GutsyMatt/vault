@@ -8,7 +8,12 @@
  * @license MIT
  */
 import { Env, ChatMessage } from "./types";
-import { fetchFhir, getPatientSession, handleAuthRequest } from "./auth";
+import {
+	fetchFhir,
+	getPatientSession,
+	getProviders,
+	handleAuthRequest,
+} from "./auth";
 
 // Model ID for Workers AI model
 // https://developers.cloudflare.com/workers-ai/models/
@@ -56,6 +61,15 @@ export default {
 			}
 
 			// Method not allowed for other request types
+			return new Response("Method not allowed", { status: 405 });
+		}
+
+		if (url.pathname === "/api/providers") {
+			if (request.method === "GET") {
+				return Response.json(await getProviders(env), {
+					headers: { "cache-control": "public, max-age=3600" },
+				});
+			}
 			return new Response("Method not allowed", { status: 405 });
 		}
 
@@ -157,7 +171,12 @@ async function handlePatientRequest(
 		const patient = (await response.json()) as {
 			id: string;
 			birthDate?: string;
-			name?: { use?: string; text?: string; given?: string[]; family?: string }[];
+			name?: {
+				use?: string;
+				text?: string;
+				given?: string[];
+				family?: string;
+			}[];
 		};
 		const name =
 			patient.name?.find((n) => n.use === "official") ?? patient.name?.[0];

@@ -126,10 +126,17 @@ a SMART on FHIR standalone launch using the OAuth 2.0 authorization code flow wi
 
 | Route            | Purpose                                                                 |
 | ---------------- | ----------------------------------------------------------------------- |
-| `/auth/login`    | Discovers endpoints from `.well-known/smart-configuration` and redirects to MyChart |
+| `/auth/login`    | Takes the chosen provider (`?iss=`), discovers its endpoints from `.well-known/smart-configuration` and redirects to MyChart |
 | `/auth/callback` | Verifies `state`, exchanges the code + PKCE verifier for an access token |
 | `/auth/logout`   | Clears the session                                                      |
 | `/api/patient`   | Returns the signed-in patient's name and birth date (FHIR `Patient` read) |
+| `/api/providers` | Lists the healthcare providers patients can choose from                 |
+
+Patients pick their healthcare provider from a searchable list before signing
+in. The list always starts with the default FHIR server (the Epic sandbox unless
+`EPIC_FHIR_BASE_URL` is set). When `EPIC_PRODUCTION_CLIENT_ID` is set, it also
+includes every organization in [Epic's endpoint directory](https://open.epic.com/Endpoints/R4),
+cached for a day. `/auth/login` only accepts providers from this list.
 
 The session is stored in an AES-GCM encrypted, `HttpOnly` cookie, and the
 access token is refreshed automatically when Epic issues a refresh token.
@@ -155,14 +162,17 @@ access token is refreshed automatically when Epic issues a refresh token.
 | -------------------- | ------------------------------------------------------------- |
 | `EPIC_CLIENT_ID`     | — (required; use the non-production ID for the sandbox)       |
 | `SESSION_SECRET`     | — (required)                                                  |
+| `EPIC_PRODUCTION_CLIENT_ID` | unset → only the default provider is offered; set it to offer every Epic organization |
 | `EPIC_CLIENT_SECRET` | unset → public client (PKCE only)                             |
 | `EPIC_FHIR_BASE_URL` | `https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4` (sandbox) |
 | `EPIC_REDIRECT_URI`  | `<request origin>/auth/callback`                              |
 | `EPIC_SCOPE`         | `launch/patient openid fhirUser`                              |
 
-To go live with a specific health system, set `EPIC_FHIR_BASE_URL` to that
-organization's FHIR R4 endpoint (listed on open.epic.com) and use your
-production client ID.
+Epic issues separate non-production and production client IDs. The sandbox
+uses `EPIC_CLIENT_ID`; every other provider uses `EPIC_PRODUCTION_CLIENT_ID`.
+A patient-facing app is typically available at an organization only once
+Epic's production client ID has synced to it, so a provider in the list may
+still reject sign-in until then.
 
 ## Customization
 

@@ -19,6 +19,12 @@ export interface Env {
 	EPIC_CLIENT_ID: string;
 
 	/**
+	 * Production client ID. When set, patients can pick any organization from
+	 * Epic's endpoint directory instead of only the default FHIR server.
+	 */
+	EPIC_PRODUCTION_CLIENT_ID?: string;
+
+	/**
 	 * Client secret for confidential clients. Leave unset for public clients.
 	 */
 	EPIC_CLIENT_SECRET?: string;

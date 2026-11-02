@@ -39,6 +39,45 @@ userInput.addEventListener("keydown", function (e) {
 sendButton.addEventListener("click", sendMessage);
 
 loadPatient();
+loadProviders();
+
+/**
+ * Fills the healthcare provider picker used to sign in with MyChart
+ */
+async function loadProviders() {
+	const form = document.getElementById("provider-form");
+	const input = document.getElementById("provider-input");
+	const list = document.getElementById("provider-list");
+	const iss = document.getElementById("provider-iss");
+	const error = document.getElementById("provider-error");
+	if (!form) return;
+
+	let providers = [];
+	try {
+		const response = await fetch("/api/providers");
+		if (response.ok) providers = await response.json();
+	} catch (err) {
+		console.error("Error loading providers:", err);
+	}
+
+	for (const provider of providers) {
+		const option = document.createElement("option");
+		option.value = provider.name;
+		list.appendChild(option);
+	}
+	if (providers.length === 1) input.value = providers[0].name;
+
+	form.addEventListener("submit", (e) => {
+		const provider = providers.find((p) => p.name === input.value);
+		if (!provider) {
+			e.preventDefault();
+			error.hidden = false;
+			return;
+		}
+		error.hidden = true;
+		iss.value = provider.url;
+	});
+}
 
 /**
  * Shows the signed-in MyChart patient, if any

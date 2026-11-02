@@ -140,6 +140,36 @@
 				color: var(--text-light);
 			}
 
+			.provider-form {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.5rem;
+				justify-content: center;
+				align-items: center;
+			}
+
+			.provider-form input {
+				flex: 1 1 16rem;
+				max-width: 24rem;
+				padding: 0.4rem 0.6rem;
+				border: 1px solid var(--border-color);
+				border-radius: 4px;
+				font-family: inherit;
+			}
+
+			.provider-form button {
+				padding: 0.4rem 1rem;
+				background-color: var(--primary-color);
+				color: white;
+				border: none;
+				border-radius: 4px;
+				cursor: pointer;
+			}
+
+			.provider-error {
+				color: #b91c1c;
+			}
+
 			.auth-status a {
 				color: var(--primary-color);
 				font-weight: 600;
@@ -157,9 +187,24 @@
 		<header>
 			<h1>Cloudflare AI Chat</h1>
 			<p>Powered by Cloudflare Workers AI</p>
-			<p class="auth-status" id="auth-status">
-				<a href="/auth/login">Sign in with MyChart</a>
-			</p>
+			<div class="auth-status" id="auth-status">
+				<form class="provider-form" id="provider-form" action="/auth/login">
+					<label for="provider-input">Sign in with MyChart</label>
+					<input
+						id="provider-input"
+						list="provider-list"
+						placeholder="Search for your healthcare provider"
+						autocomplete="off"
+						required
+					/>
+					<datalist id="provider-list"></datalist>
+					<input type="hidden" name="iss" id="provider-iss" />
+					<button type="submit">Sign in</button>
+				</form>
+				<p class="provider-error" id="provider-error" hidden>
+					Choose a provider from the list.
+				</p>
+			</div>
 		</header>
 
 		<div class="chat-container">
