@@ -19,5 +19,12 @@ export interface Env {
 	AUTOMATION_TOKEN_SHA256?: string;
 	/** Local development and tests only. Ignored unless the host is *.localhost. */
 	DEV_AUTH_EMAIL?: string;
+	/** Explicit opt-in. Absent/false means the worker never queries Drive. */
+	DRIVE_SYNC_ENABLED?: string;
+	/** Only explicitly authorized child-folder IDs. */
+	DRIVE_FOLDER_PERSON_MAP?: string;
+	DRIVE_CLIENT_ID?: string;
+	DRIVE_CLIENT_SECRET?: string;
+	DRIVE_REFRESH_TOKEN?: string;
 	APP_VERSION?: string;
 }

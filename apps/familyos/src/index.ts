@@ -11,6 +11,7 @@
  */
 import { SESSION_COOKIE, allowedEmails, authenticate, automationMayCall, googleJwks, verifyGoogleIdToken } from "./core/auth";
 import { MAX_UPLOAD } from "./storage/person-vault";
+import { runDriveSync } from "./connectors/drive-sync";
 import type { Env } from "./types";
 
 export { PersonVault } from "./storage/person-vault";
@@ -219,7 +220,7 @@ export default {
 			await request.body?.cancel();
 			return withHeaders(Response.json({ error: "Not permitted for automation" }, { status: 403 }), NOSTORE);
 		}
-		if (sub === "/tick" || sub === "/card" || sub.startsWith("/sources/")) {
+		if (sub === "/tick" || sub === "/card" || sub.startsWith("/sources/") || sub.startsWith("/drive-imports/") || sub.startsWith("/drive-sync/")) {
 			// Internal / connector-only paths are not exposed to browsers.
 			await request.body?.cancel();
 			return withHeaders(new Response("Not found", { status: 404 }));
@@ -238,6 +239,7 @@ export default {
 	},
 
 	async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+		if (env.DRIVE_SYNC_ENABLED === "true") ctx.waitUntil(runDriveSync(env).then(result => console.log(JSON.stringify({evt:"drive.sync",result}))).catch(() => console.log(JSON.stringify({evt:"drive.sync.failed"}))));
 		for (const person of people(env)) {
 			ctx.waitUntil(
 				vault(env, person)
