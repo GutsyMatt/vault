@@ -33,8 +33,8 @@
 	"triggers": { "crons": ["*/30 * * * *"] },
 	"vars": {
 		"GOOGLE_CLIENT_ID": "406206707598-bjp68spaud2r74p5p8qq05pbp79sp2f1.apps.googleusercontent.com",
-		// Add Kellsie's Google address here (comma-separated) to give her access.
-		"ALLOWED_EMAILS": "mattherbert01@gmail.com",
+		// Parents. Each must also be a test user on the LifeOS Google OAuth consent screen while it is in testing mode.
+		"ALLOWED_EMAILS": "mattherbert01@gmail.com,hnatejkok@gmail.com",
 		"HOST_PERSON_MAP": "{\"callum.libbyhd.org\":\"callum\",\"finnley.libbyhd.org\":\"finnley\"}",
 		"HOUSEHOLD": "{\"hosts\":[\"familyos.libbyhd.org\"],\"members\":[{\"person\":\"callum\",\"host\":\"callum.libbyhd.org\"},{\"person\":\"finnley\",\"host\":\"finnley.libbyhd.org\"}]}",
 		"APP_VERSION": "0.3.0"
