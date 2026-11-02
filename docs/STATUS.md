@@ -2,7 +2,9 @@
 
 Last updated: 2026-11-02, by a Claude Code session. Status words: `VERIFIED OPERATIONAL` / `PARTIAL` / `BLOCKED` / `NOT IMPLEMENTED`.
 
-"Verified" below means verified **locally**: automated tests (synthetic values inside test files only) plus a real browser run against an empty store. The app contains no demo data. **Nothing is deployed yet**, so no feature is `VERIFIED OPERATIONAL` in production.
+**Deployed 2026-11-02 ~04:05 UTC** (merge of PRs #2, #3, #5 → Workers Builds → Worker `vault`, v0.3.0). Verified from outside the home network: `familyos.`, `callum.` and `finnley.libbyhd.org` resolve, serve valid HTTPS, and show only the Google sign-in page. `/api/summary` and `/api/export` return 401 without sign-in; a forged session cookie gets 401; a cross-site write gets 403; `vault.mattherbert01.workers.dev` now returns 404. **Not yet verified:** a successful sign-in with real data, because Google first needs the three addresses added as authorized JavaScript origins (Path to live, step 1).
+
+Elsewhere, "verified" means verified **locally**: automated tests (synthetic values inside test files only) plus a real browser run against an empty store. The app contains no demo data. **Nothing is deployed yet**, so no feature is `VERIFIED OPERATIONAL` in production.
 
 | Feature | Status | Evidence | Next step |
 |---|---|---|---|
@@ -36,7 +38,7 @@ Sign-in uses the **Google sign-in already live on `lifeos.libbyhd.org`** (Google
 |---|---|---|---|
 | 1 | In Google Cloud → project **LifeOS** → APIs & Services → Credentials → **Life OS web** → Authorized JavaScript origins, add `https://familyos.libbyhd.org`, `https://callum.libbyhd.org`, `https://finnley.libbyhd.org` | Matthew | console.cloud.google.com |
 | 2 | (For Kellsie) add her Google address as a **test user** on the LifeOS OAuth consent screen, and to `ALLOWED_EMAILS` in `wrangler.jsonc` | Matthew / Claude | Same project → OAuth consent screen |
-| 3 | Merge PR #2, then PR #3, into `main` (`github.com/LibbyHD/vault/pulls`). Workers Builds then deploys automatically. **This replaces the unused chat template currently deployed as the `vault` Worker.** | Matthew | GitHub |
+| 3 | ~~Merge PR #2, then PR #3~~ **Done 2026-11-02 by Claude, at Matthew's request.** Workers Builds then deploys automatically. **This replaces the unused chat template currently deployed as the `vault` Worker.** | Matthew | GitHub |
 | 4 | Verify from cellular: all three sites show Google sign-in, then empty setup; a non-approved Google account is refused | Claude, with Matthew's phone | |
 
 Known risk at step 3: the Workers Builds token may lack permission to create the three custom domains. If the build log says so, add them by hand: Cloudflare → Workers & Pages → vault → Settings → Domains & Routes → Add → Custom domain (one per address).
