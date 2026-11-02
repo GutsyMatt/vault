@@ -9,7 +9,7 @@
  * (Cloudflare Access JWT, fail closed) → hostname selects person or household →
  * that person's Durable Object handles /api/*; static shell otherwise.
  */
-import { SESSION_COOKIE, allowedEmails, authenticate, googleJwks, verifyGoogleIdToken } from "./core/auth";
+import { SESSION_COOKIE, allowedEmails, authenticate, automationMayCall, googleJwks, verifyGoogleIdToken } from "./core/auth";
 import { MAX_UPLOAD } from "./storage/person-vault";
 import type { Env } from "./types";
 
@@ -215,6 +215,10 @@ export default {
 		}
 
 		const sub = url.pathname.slice("/api".length);
+		if (auth.principal.via === "automation" && !automationMayCall(request.method, sub)) {
+			await request.body?.cancel();
+			return withHeaders(Response.json({ error: "Not permitted for automation" }, { status: 403 }), NOSTORE);
+		}
 		if (sub === "/tick" || sub === "/card" || sub.startsWith("/sources/")) {
 			// Internal / connector-only paths are not exposed to browsers.
 			await request.body?.cancel();

@@ -877,13 +877,15 @@ export class PersonVault extends DurableObject<Env> {
 		if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) throw new HttpError(400, "Date must be YYYY-MM-DD");
 		const id = ulid();
 		this.sql.exec(
-			"INSERT INTO life_events (id, at, actor, on_date, title, note, verification) VALUES (?, ?, ?, ?, ?, ?, 'PARENT_REPORT')",
+			"INSERT INTO life_events (id, at, actor, on_date, title, note, verification) VALUES (?, ?, ?, ?, ?, ?, ?)",
 			id,
 			new Date().toISOString(),
 			actor,
 			on,
 			str(b.title, "title", { required: true, max: 200 }),
 			str(b.note, "note", { max: 4000 }),
+			// Entries added by automation come from records, not from a parent's own report.
+			actor.startsWith("automation:") ? "EXTRACTED" : "PARENT_REPORT",
 		);
 		this.event(actor, "life_event.added", { id });
 		return { id };

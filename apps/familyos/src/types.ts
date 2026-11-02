@@ -15,6 +15,8 @@ export interface Env {
 	ACCESS_AUD?: string;
 	/** Comma-separated emails allowed in. Required for any sign-in method. */
 	ALLOWED_EMAILS?: string;
+	/** SHA-256 (hex) of Claude's automation key. Remove to revoke. */
+	AUTOMATION_TOKEN_SHA256?: string;
 	/** Local development and tests only. Ignored unless the host is *.localhost. */
 	DEV_AUTH_EMAIL?: string;
 	APP_VERSION?: string;
