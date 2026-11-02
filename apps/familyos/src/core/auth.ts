@@ -1,7 +1,14 @@
 /**
- * Layer-2 authentication: verify the Cloudflare Access JWT on every request.
- * Cloudflare Access (layer 1) is configured in the dashboard; this code never
- * trusts that it is present. Fails closed when not configured.
+ * Authentication. Fails closed. Two supported methods, checked in this order:
+ *
+ *  1. Google sign-in (the method already live on lifeos.libbyhd.org): the browser
+ *     signs in with Google Identity Services, posts the Google ID token to
+ *     /auth/google, the Worker verifies it (signature, audience, issuer, expiry,
+ *     verified email, allow-list) and stores it in a Secure HttpOnly cookie.
+ *     Every later request re-verifies that cookie.
+ *  2. Cloudflare Access: if an Access application sits in front, its JWT is verified.
+ *
+ * If neither is configured, every request is refused.
  */
 import type { Env } from "../types";
 
@@ -13,8 +20,12 @@ export interface Jwks {
 }
 export interface Principal {
 	email: string;
-	via: "access" | "dev";
+	via: "google" | "access" | "dev";
 }
+
+export const SESSION_COOKIE = "__Host-fos_gid";
+const GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"];
+const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
 
 function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> {
 	const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
@@ -27,10 +38,11 @@ function b64urlJson(s: string): any {
 	return JSON.parse(new TextDecoder().decode(b64urlToBytes(s)));
 }
 
-export async function verifyAccessJwt(
+/** Verify an RS256 JWT's signature, audience, issuer and time claims. Returns the payload or null. */
+export async function verifyRs256Jwt(
 	token: string,
-	opts: { aud: string; issuer: string; jwks: Jwks; nowSec?: number },
-): Promise<{ email: string } | null> {
+	opts: { aud: string; issuers: string[]; jwks: Jwks; nowSec?: number },
+): Promise<Record<string, any> | null> {
 	const parts = token.split(".");
 	if (parts.length !== 3) return null;
 	let header: any, payload: any;
@@ -43,43 +55,72 @@ export async function verifyAccessJwt(
 	if (header.alg !== "RS256") return null;
 	const jwk = opts.jwks.keys.find((k) => k.kid === header.kid);
 	if (!jwk) return null;
-	const key = await crypto.subtle.importKey(
-		"jwk",
-		{ kty: jwk.kty, n: jwk.n, e: jwk.e, alg: "RS256", ext: true },
-		{ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-		false,
-		["verify"],
-	);
-	const ok = await crypto.subtle.verify(
-		"RSASSA-PKCS1-v1_5",
-		key,
-		b64urlToBytes(parts[2]),
-		new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
-	);
+	let ok = false;
+	try {
+		const key = await crypto.subtle.importKey(
+			"jwk",
+			{ kty: jwk.kty, n: jwk.n, e: jwk.e, alg: "RS256", ext: true },
+			{ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+			false,
+			["verify"],
+		);
+		ok = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64urlToBytes(parts[2]), new TextEncoder().encode(`${parts[0]}.${parts[1]}`));
+	} catch {
+		return null;
+	}
 	if (!ok) return null;
 	const now = opts.nowSec ?? Math.floor(Date.now() / 1000);
 	const auds: string[] = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
 	if (!auds.includes(opts.aud)) return null;
-	if (payload.iss !== opts.issuer) return null;
+	if (!opts.issuers.includes(payload.iss)) return null;
 	if (typeof payload.exp !== "number" || payload.exp < now) return null;
 	if (typeof payload.nbf === "number" && payload.nbf > now + 60) return null;
-	if (typeof payload.email !== "string") return null;
-	return { email: payload.email.toLowerCase() };
+	return payload;
 }
 
-let jwksCache: { at: number; teamDomain: string; jwks: Jwks } | null = null;
-async function getJwks(teamDomain: string): Promise<Jwks> {
-	if (jwksCache && jwksCache.teamDomain === teamDomain && Date.now() - jwksCache.at < 10 * 60_000) return jwksCache.jwks;
-	const res = await fetch(`https://${teamDomain}/cdn-cgi/access/certs`);
+export async function verifyAccessJwt(token: string, opts: { aud: string; issuer: string; jwks: Jwks; nowSec?: number }): Promise<{ email: string } | null> {
+	const p = await verifyRs256Jwt(token, { aud: opts.aud, issuers: [opts.issuer], jwks: opts.jwks, nowSec: opts.nowSec });
+	if (!p || typeof p.email !== "string") return null;
+	return { email: p.email.toLowerCase() };
+}
+
+export async function verifyGoogleIdToken(token: string, opts: { clientId: string; jwks: Jwks; nowSec?: number }): Promise<{ email: string; exp: number } | null> {
+	const p = await verifyRs256Jwt(token, { aud: opts.clientId, issuers: GOOGLE_ISSUERS, jwks: opts.jwks, nowSec: opts.nowSec });
+	if (!p || typeof p.email !== "string" || p.email_verified !== true) return null;
+	return { email: p.email.toLowerCase(), exp: p.exp };
+}
+
+const jwksCache = new Map<string, { at: number; jwks: Jwks }>();
+async function getJwks(url: string): Promise<Jwks> {
+	const hit = jwksCache.get(url);
+	if (hit && Date.now() - hit.at < 10 * 60_000) return hit.jwks;
+	const res = await fetch(url);
 	if (!res.ok) throw new Error(`JWKS fetch failed: ${res.status}`);
 	const jwks = (await res.json()) as Jwks;
-	jwksCache = { at: Date.now(), teamDomain, jwks };
+	jwksCache.set(url, { at: Date.now(), jwks });
 	return jwks;
+}
+export const googleJwks = () => getJwks(GOOGLE_JWKS_URL);
+
+export function allowedEmails(env: Env): string[] {
+	return (env.ALLOWED_EMAILS || "")
+		.split(",")
+		.map((s) => s.trim().toLowerCase())
+		.filter(Boolean);
+}
+
+export function readCookie(request: Request, name: string): string | null {
+	const header = request.headers.get("cookie") || "";
+	for (const part of header.split(";")) {
+		const [k, ...v] = part.trim().split("=");
+		if (k === name) return v.join("=");
+	}
+	return null;
 }
 
 export type AuthResult =
 	| { ok: true; principal: Principal }
-	| { ok: false; status: 401 | 403 | 503; reason: string };
+	| { ok: false; status: 401 | 403 | 503; reason: string; canSignIn: boolean };
 
 function isLocalHost(hostname: string): boolean {
 	return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "127.0.0.1";
@@ -87,30 +128,44 @@ function isLocalHost(hostname: string): boolean {
 
 export async function authenticate(request: Request, env: Env): Promise<AuthResult> {
 	const url = new URL(request.url);
-	// Development bypass: only on *.localhost AND only when DEV_AUTH_EMAIL is set (.dev.vars / tests).
+	// Local development and tests only: requires *.localhost AND DEV_AUTH_EMAIL.
 	if (env.DEV_AUTH_EMAIL && isLocalHost(url.hostname)) {
 		return { ok: true, principal: { email: env.DEV_AUTH_EMAIL.toLowerCase(), via: "dev" } };
 	}
-	if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) {
-		return { ok: false, status: 503, reason: "access-not-configured" };
+	const allowed = allowedEmails(env);
+	const googleOn = !!env.GOOGLE_CLIENT_ID && allowed.length > 0;
+	const accessOn = !!env.ACCESS_TEAM_DOMAIN && !!env.ACCESS_AUD && allowed.length > 0;
+	if (!googleOn && !accessOn) return { ok: false, status: 503, reason: "auth-not-configured", canSignIn: false };
+
+	// Cloudflare Access (if an Access app is in front and configured).
+	const accessJwt = request.headers.get("Cf-Access-Jwt-Assertion");
+	if (accessOn && accessJwt) {
+		try {
+			const c = await verifyAccessJwt(accessJwt, {
+				aud: env.ACCESS_AUD!,
+				issuer: `https://${env.ACCESS_TEAM_DOMAIN}`,
+				jwks: await getJwks(`https://${env.ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs`),
+			});
+			if (c && allowed.includes(c.email)) return { ok: true, principal: { email: c.email, via: "access" } };
+			if (c) return { ok: false, status: 403, reason: "not-allowed", canSignIn: googleOn };
+		} catch {
+			/* fall through to Google */
+		}
 	}
-	const token = request.headers.get("Cf-Access-Jwt-Assertion");
-	if (!token) return { ok: false, status: 401, reason: "missing-token" };
-	let claims: { email: string } | null = null;
-	try {
-		claims = await verifyAccessJwt(token, {
-			aud: env.ACCESS_AUD,
-			issuer: `https://${env.ACCESS_TEAM_DOMAIN}`,
-			jwks: await getJwks(env.ACCESS_TEAM_DOMAIN),
-		});
-	} catch {
-		return { ok: false, status: 503, reason: "jwks-unavailable" };
+
+	// Google sign-in session cookie.
+	if (googleOn) {
+		const token = readCookie(request, SESSION_COOKIE);
+		if (!token) return { ok: false, status: 401, reason: "no-session", canSignIn: true };
+		let c: { email: string } | null = null;
+		try {
+			c = await verifyGoogleIdToken(token, { clientId: env.GOOGLE_CLIENT_ID!, jwks: await googleJwks() });
+		} catch {
+			return { ok: false, status: 503, reason: "google-keys-unavailable", canSignIn: true };
+		}
+		if (!c) return { ok: false, status: 401, reason: "session-invalid-or-expired", canSignIn: true };
+		if (!allowed.includes(c.email)) return { ok: false, status: 403, reason: "not-allowed", canSignIn: true };
+		return { ok: true, principal: { email: c.email, via: "google" } };
 	}
-	if (!claims) return { ok: false, status: 401, reason: "invalid-token" };
-	const allowed = (env.ALLOWED_EMAILS || "")
-		.split(",")
-		.map((s) => s.trim().toLowerCase())
-		.filter(Boolean);
-	if (!allowed.includes(claims.email)) return { ok: false, status: 403, reason: "not-allowed" };
-	return { ok: true, principal: { email: claims.email, via: "access" } };
+	return { ok: false, status: 401, reason: "missing-token", canSignIn: false };
 }

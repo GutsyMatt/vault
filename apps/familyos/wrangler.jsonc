@@ -1,37 +1,21 @@
 /**
- * FamilyOS Worker (LibbyHD → FamilyOS): familyos. (household), callum., finnley.
- * Not public: workers.dev and preview URLs are disabled, so the custom domains
- * (behind Cloudflare Access) are the only way in. See docs/STATUS.md.
+ * DEV / TEST config only. Production is ../../wrangler.jsonc (deployed by Workers Builds on merge to main).
+ * No routes and no workers.dev here, so this config can never take over the live domains.
  */
 {
 	"$schema": "../../node_modules/wrangler/config-schema.json",
-	"name": "familyos",
+	"name": "familyos-dev",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-10-08",
 	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": false,
 	"preview_urls": false,
-	"routes": [
-		{ "pattern": "familyos.libbyhd.org", "custom_domain": true },
-		{ "pattern": "callum.libbyhd.org", "custom_domain": true },
-		{ "pattern": "finnley.libbyhd.org", "custom_domain": true }
-	],
-	"assets": {
-		"binding": "ASSETS",
-		"directory": "./public",
-		"run_worker_first": true
-	},
-	"durable_objects": {
-		"bindings": [{ "name": "PERSON_VAULT", "class_name": "PersonVault" }]
-	},
+	"assets": { "binding": "ASSETS", "directory": "./public", "run_worker_first": true },
+	"durable_objects": { "bindings": [{ "name": "PERSON_VAULT", "class_name": "PersonVault" }] },
 	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["PersonVault"] }],
-	"triggers": { "crons": ["*/30 * * * *"] },
 	"vars": {
-		"HOST_PERSON_MAP": "{\"callum.libbyhd.org\":\"callum\",\"finnley.libbyhd.org\":\"finnley\"}",
-		"HOUSEHOLD": "{\"hosts\":[\"familyos.libbyhd.org\"],\"members\":[{\"person\":\"callum\",\"host\":\"callum.libbyhd.org\"},{\"person\":\"finnley\",\"host\":\"finnley.libbyhd.org\"}]}",
-		"APP_VERSION": "0.2.0"
-		// ACCESS_TEAM_DOMAIN, ACCESS_AUD and ALLOWED_EMAILS are set as secrets/vars at deploy time.
-		// Until they are set, every request is refused (fail closed).
-	},
-	"observability": { "enabled": true }
+		"HOST_PERSON_MAP": "{}",
+		"HOUSEHOLD": "{}",
+		"APP_VERSION": "0.3.0"
+	}
 }

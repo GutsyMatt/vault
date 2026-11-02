@@ -12,7 +12,7 @@ Build brief: `docs/ONE_SHOT_PROMPT.md`. Status: `docs/STATUS.md`.
 - **One Cloudflare Worker** serves all three sites. The **hostname decides the person** (or the household view). There is no other way to choose one.
 - **One Durable Object (SQLite) per person** (`src/storage/person-vault.ts`). A child's records, documents, logs and audit trail live only in his object. Ids from the other child are not found (404). The household site can read only each child's compact summary card, with no write routes.
 - **Append-only:** status changes, medication verifications and conflict resolutions are new rows. Nothing clinical is updated in place or deleted.
-- **Fail-closed sign-in:** every request must carry a valid Cloudflare Access JWT for an allow-listed email. Until Access is configured, every site is locked. `workers.dev` and preview URLs are off.
+- **Fail-closed sign-in:** Google sign-in (same Google client as `lifeos.libbyhd.org`), restricted to `ALLOWED_EMAILS`. The Google token is re-verified on every request. A Cloudflare Access JWT is also accepted if Access is ever put in front. With neither configured, every site is locked. `workers.dev` and preview URLs are off.
 - **No demo data.** The app starts empty and asks for each child's basics once.
 - **No AI and no external calls with health data.** Briefs and patterns are deterministic rules, labelled "system pattern".
 
@@ -40,11 +40,5 @@ npm run dev:finnley          # http://127.0.0.1:8788  (third terminal)
 cd apps/familyos && npm run check   # typecheck + 25 tests + deploy dry-run
 ```
 
-## Deploy (see blockers in docs/STATUS.md)
-```bash
-cd apps/familyos
-npx wrangler secret put ACCESS_AUD
-npx wrangler secret put ALLOWED_EMAILS        # e.g. a@x.com,b@y.com
-npx wrangler deploy --var ACCESS_TEAM_DOMAIN:<team>.cloudflareaccess.com
-```
-Then, from a phone on cellular, open all three sites. You should get the sign-in, then the empty setup screens.
+## Deploy
+Production config is the repo-root `wrangler.jsonc` (Worker `vault`). **Merging to `main` deploys automatically** through Cloudflare Workers Builds. See "Path to live" in `docs/STATUS.md`. This folder's `wrangler.jsonc` is for dev and tests only, and has no routes.

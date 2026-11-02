@@ -1,22 +1,44 @@
 /**
- * For more details on how to configure Wrangler, refer to:
- * https://developers.cloudflare.com/workers/wrangler/configuration/
+ * PRODUCTION config for FamilyOS (LibbyHD → FamilyOS).
+ *
+ * Cloudflare Workers Builds deploys this automatically when main changes
+ * (account 92ca8386…, Worker "vault", already connected to this repo).
+ * The code lives in apps/familyos. apps/familyos/wrangler.jsonc is for local dev and tests only.
+ *
+ * Sign-in: Google (same OAuth client as lifeos.libbyhd.org), restricted to ALLOWED_EMAILS.
+ * Not public: workers.dev and preview URLs are off; the three custom domains are the only way in.
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "vault",
-	"main": "src/index.ts",
+	"main": "apps/familyos/src/index.ts",
 	"compatibility_date": "2025-10-08",
-	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": false,
+	"preview_urls": false,
+	"routes": [
+		{ "pattern": "familyos.libbyhd.org", "custom_domain": true },
+		{ "pattern": "callum.libbyhd.org", "custom_domain": true },
+		{ "pattern": "finnley.libbyhd.org", "custom_domain": true }
+	],
 	"assets": {
 		"binding": "ASSETS",
-		"directory": "./public"
+		"directory": "./apps/familyos/public",
+		"run_worker_first": true
 	},
-	"observability": {
-		"enabled": true
+	"durable_objects": {
+		"bindings": [{ "name": "PERSON_VAULT", "class_name": "PersonVault" }]
 	},
-	"ai": {
-		"binding": "AI"
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["PersonVault"] }],
+	"triggers": { "crons": ["*/30 * * * *"] },
+	"vars": {
+		"GOOGLE_CLIENT_ID": "406206707598-bjp68spaud2r74p5p8qq05pbp79sp2f1.apps.googleusercontent.com",
+		// Add Kellsie's Google address here (comma-separated) to give her access.
+		"ALLOWED_EMAILS": "mattherbert01@gmail.com",
+		"HOST_PERSON_MAP": "{\"callum.libbyhd.org\":\"callum\",\"finnley.libbyhd.org\":\"finnley\"}",
+		"HOUSEHOLD": "{\"hosts\":[\"familyos.libbyhd.org\"],\"members\":[{\"person\":\"callum\",\"host\":\"callum.libbyhd.org\"},{\"person\":\"finnley\",\"host\":\"finnley.libbyhd.org\"}]}",
+		"APP_VERSION": "0.3.0"
 	},
+	"observability": { "enabled": true },
 	"upload_source_maps": true
 }

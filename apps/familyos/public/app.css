@@ -142,3 +142,7 @@ dialog::backdrop { background: rgb(0 0 0 / 0.55); }
 .card.member[data-side="left"] { border-top: 6px solid var(--left); }
 .card.member[data-side="right"] { border-top: 6px solid var(--right); }
 .card.member h2 a { color: inherit; }
+
+/* Sign-in page */
+.signin { max-width: 28rem; margin: 15vh auto 0; padding: 0 16px; text-align: center; }
+.signin #g { display: flex; justify-content: center; margin: 24px 0; min-height: 48px; }

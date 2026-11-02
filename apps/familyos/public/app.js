@@ -19,6 +19,11 @@ let tab = "today";
 
 async function api(path, opts = {}) {
 	const res = await fetch(`/api${path}`, { credentials: "same-origin", ...opts });
+	if (res.status === 401) {
+		// Sign-in expired: reload to show the sign-in page.
+		location.reload();
+		throw new Error("Signing in again…");
+	}
 	const ct = res.headers.get("content-type") || "";
 	const body = ct.includes("json") ? await res.json() : null;
 	if (!res.ok) throw new Error(body?.error || `Request failed (${res.status})`);
@@ -390,7 +395,14 @@ function renderSources() {
 		<p>${r ? `Last run ${esc(new Date(r.started_at).toLocaleString())}: ${r.ok ? "completed" : "FAILED"}.` : "No automatic run has completed yet."}</p>
 		<p class="small muted">Runs every 30 minutes once deployed: prepares briefs 7 days, 48 hours and 12 hours before each appointment and checks for overdue items.</p>
 	</div>
+	<div class="card"><h2>Signed in</h2><p class="small" id="who"></p><button class="ghost" id="signout">Sign out</button></div>
 	<div class="card"><h2>Your data</h2><p><a class="btn ghost" href="/api/export" download="familyos-export.json">Download a full export (JSON)</a></p></div>`;
+	api("/whoami").then((w) => ($("#who").textContent = w.email)).catch(() => {});
+	$("#signout").addEventListener("click", async () => {
+		await fetch("/auth/signout", { method: "POST" });
+		try { google.accounts.id.disableAutoSelect(); } catch {}
+		location.reload();
+	});
 }
 
 // ---------- Household (parent) view: familyos.libbyhd.org ----------

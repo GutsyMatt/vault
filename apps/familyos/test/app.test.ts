@@ -2,7 +2,8 @@ import { SELF, env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { torontoLocalToUtcIso } from "../src/core/util";
 import { computeAges, detectRedFlags, parseRapidLog } from "../src/medical/clinical";
-import { verifyAccessJwt } from "../src/core/auth";
+import { verifyAccessJwt, verifyGoogleIdToken } from "../src/core/auth";
+import { signInPage } from "../src/index";
 import type { PersonVault } from "../src/storage/person-vault";
 
 const C = "http://callum.localhost";
@@ -58,7 +59,7 @@ describe("10. authentication fails closed", () => {
 	it("health check is public and contains no PHI", async () => {
 		const r = await SELF.fetch("https://callum.libbyhd.org/healthz");
 		expect(r.status).toBe(200);
-		expect(await r.json()).toEqual({ ok: true, version: "0.2.0" });
+		expect(await r.json()).toEqual({ ok: true, version: "0.3.0" });
 	});
 
 	it("security headers are set", async () => {
@@ -280,6 +281,51 @@ describe("household (parent) view: familyos host", () => {
 	it("is locked on the production host without sign-in", async () => {
 		const r = await SELF.fetch("https://familyos.libbyhd.org/api/household");
 		expect(r.status).toBe(503);
+		await r.arrayBuffer();
+	});
+});
+
+describe("Google sign-in (same client as lifeos.libbyhd.org)", () => {
+	async function keypair() {
+		const kp = (await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"])) as CryptoKeyPair;
+		const pub = (await crypto.subtle.exportKey("jwk", kp.publicKey)) as JsonWebKey;
+		const b64 = (o: unknown) => btoa(JSON.stringify(o)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+		const sign = async (payload: object) => {
+			const head = `${b64({ alg: "RS256", kid: "g1" })}.${b64(payload)}`;
+			const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", kp.privateKey, new TextEncoder().encode(head)));
+			return `${head}.${btoa(String.fromCharCode(...sig)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_")}`;
+		};
+		return { jwks: { keys: [{ ...pub, kid: "g1" }] }, sign };
+	}
+	it("accepts a valid Google ID token and rejects wrong client, unverified email, or expiry", async () => {
+		const { jwks, sign } = await keypair();
+		const now = Math.floor(Date.now() / 1000);
+		const base = { iss: "https://accounts.google.com", aud: "CLIENT", email: "Parent@Example.test", email_verified: true, exp: now + 3600 };
+		expect(await verifyGoogleIdToken(await sign(base), { clientId: "CLIENT", jwks })).toMatchObject({ email: "parent@example.test" });
+		expect(await verifyGoogleIdToken(await sign({ ...base, aud: "OTHER" }), { clientId: "CLIENT", jwks })).toBeNull();
+		expect(await verifyGoogleIdToken(await sign({ ...base, email_verified: false }), { clientId: "CLIENT", jwks })).toBeNull();
+		expect(await verifyGoogleIdToken(await sign({ ...base, exp: now - 5 }), { clientId: "CLIENT", jwks })).toBeNull();
+		expect(await verifyGoogleIdToken(await sign({ ...base, iss: "https://evil.example" }), { clientId: "CLIENT", jwks })).toBeNull();
+	});
+	it("sign-in page contains no PHI, escapes the client id, and only allows Google's script", async () => {
+		const r = signInPage('id"><script>x</script>', "Sign in with Google to continue.");
+		const html = await r.text();
+		expect(r.status).toBe(401);
+		expect(html).not.toContain("<script>x</script>");
+		expect(html).not.toMatch(/Callum|Finnley/);
+		expect(r.headers.get("content-security-policy")).toContain("https://accounts.google.com/gsi/client");
+	});
+	it("sign-in assets are reachable before sign-in; app data is not", async () => {
+		const js = await SELF.fetch("https://callum.libbyhd.org/signin.js");
+		expect(js.status).toBe(200);
+		await js.arrayBuffer();
+		const api = await SELF.fetch("https://callum.libbyhd.org/api/summary");
+		expect(api.status).toBe(503);
+		await api.arrayBuffer();
+	});
+	it("cross-site writes are refused", async () => {
+		const r = await SELF.fetch(`${C}/api/log`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.example" }, body: JSON.stringify({ text: "x" }) });
+		expect(r.status).toBe(403);
 		await r.arrayBuffer();
 	});
 });
