@@ -1,0 +1,21 @@
+/**
+ * DEV / TEST config only. Production is ../../wrangler.jsonc (deployed by Workers Builds on merge to main).
+ * No routes and no workers.dev here, so this config can never take over the live domains.
+ */
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "familyos-dev",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-10-08",
+	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": false,
+	"preview_urls": false,
+	"assets": { "binding": "ASSETS", "directory": "./public", "run_worker_first": true },
+	"durable_objects": { "bindings": [{ "name": "PERSON_VAULT", "class_name": "PersonVault" }] },
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["PersonVault"] }],
+	"vars": {
+		"HOST_PERSON_MAP": "{}",
+		"HOUSEHOLD": "{}",
+		"APP_VERSION": "0.4.0"
+	}
+}

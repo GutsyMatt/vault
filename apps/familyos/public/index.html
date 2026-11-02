@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="robots" content="noindex, nofollow" />
+		<meta name="theme-color" content="#14161a" />
+		<title>FamilyOS</title>
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+		<link rel="apple-touch-icon" href="/icon.svg" />
+		<link rel="stylesheet" href="/app.css" />
+	</head>
+	<body>
+		<a class="skip" href="#main">Skip to content</a>
+		<header class="top" id="top">
+			<div class="who">
+				<h1 id="child-name">FamilyOS</h1>
+				<span class="badge side" id="child-label" hidden></span>
+			</div>
+			<p class="ages" id="ages"></p>
+			<p class="fresh" id="fresh" aria-live="polite"></p>
+		</header>
+		<div id="alert" class="alert" role="alert" hidden></div>
+
+		<nav class="tabs" aria-label="Sections">
+			<button data-tab="today" aria-current="page">Today</button>
+			<button data-tab="issues">Issues</button>
+			<button data-tab="record">Record</button>
+			<button data-tab="letters">Story</button>
+			<button data-tab="sources">Sources</button>
+		</nav>
+
+		<main id="main" tabindex="-1">
+			<section id="household" hidden></section>
+			<section id="setup" hidden></section>
+			<section data-panel="today"></section>
+			<section data-panel="issues" hidden></section>
+			<section data-panel="record" hidden></section>
+			<section data-panel="letters" hidden></section>
+			<section data-panel="sources" hidden></section>
+		</main>
+
+		<dialog id="sheet" aria-labelledby="sheet-title">
+			<div class="sheet-head">
+				<h2 id="sheet-title"></h2>
+				<button class="ghost" id="sheet-close" aria-label="Close">✕</button>
+			</div>
+			<div id="sheet-body"></div>
+		</dialog>
+
+		<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+		<script src="https://accounts.google.com/gsi/client" async></script>
+		<script src="/app.js" type="module"></script>
+	</body>
+</html>
